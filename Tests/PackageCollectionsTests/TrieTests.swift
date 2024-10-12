@@ -1,10 +1,14 @@
-/*
- This source file is part of the Swift.org open source project
- Copyright (c) 2020 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
- */
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2020 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
 import XCTest
 
@@ -189,6 +193,36 @@ class TrieTests: XCTestCase {
         let words = contents.components(separatedBy: " ")
         words.forEach { word in
             trie.insert(word: word, foundIn: id)
+        }
+    }
+
+    func testThreadSafe() {
+        let queue = DispatchQueue(label: "TrieTests", attributes: .concurrent)
+        let trie = Trie<Int>()
+        let docCount = 100
+
+        for _ in 0 ..< 100 {
+            let sync = DispatchGroup()
+
+            for i in 0 ..< docCount {
+                queue.async(group: sync) {
+                    Thread.sleep(forTimeInterval: Double.random(in: 100 ... 300) * 1.0e-6)
+
+                    trie.remove { $0 == i }
+                    trie.insert(word: "word-\(i)", foundIn: i)
+                    trie.insert(word: "test", foundIn: i)
+                }
+            }
+
+            switch sync.wait(timeout: .now() + 1) {
+            case .timedOut:
+                XCTFail("timeout")
+            case .success:
+                for doc in 0 ..< docCount {
+                    XCTAssertEqual(try trie.find(word: "word-\(doc)"), [doc])
+                    XCTAssertEqual(try trie.find(word: "test").count, docCount)
+                }
+            }
         }
     }
 }

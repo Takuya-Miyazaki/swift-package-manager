@@ -1,20 +1,23 @@
-/*
- This source file is part of the Swift.org open source project
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2014-2021 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
- Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
+import Basics
 
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
-*/
-
-import TSCBasic
-import TSCUtility
-
-public class Product: Codable {
-
+public class Product {
     /// The name of the product.
     public let name: String
+
+    /// Fully qualified name for this product: package ID + name of this product
+    public let identity: String
 
     /// The type of product to create.
     public let type: ProductType
@@ -23,36 +26,51 @@ public class Product: Codable {
     ///
     /// This is never empty, and is only the targets which are required to be in
     /// the product, but not necessarily their transitive dependencies.
-    @PolymorphicCodableArray
-    public var targets: [Target]
+    public var modules: [Module]
 
-    /// The path to test manifest file.
-    public let testManifest: AbsolutePath?
+    /// The path to test entry point file.
+    public let testEntryPointPath: AbsolutePath?
 
     /// The suffix for REPL product name.
     public static let replProductSuffix: String = "__REPL"
 
-    public init(name: String, type: ProductType, targets: [Target], testManifest: AbsolutePath? = nil) {
-        precondition(!targets.isEmpty)
-        if type == .executable {
-            assert(targets.filter({ $0.type == .executable }).count == 1,
-                   "Executable products should have exactly one executable target.")
+    public init(package: PackageIdentity, name: String, type: ProductType, modules: [Module], testEntryPointPath: AbsolutePath? = nil) throws {
+        guard !modules.isEmpty else {
+            throw InternalError("Targets cannot be empty")
         }
-        if testManifest != nil {
-            assert(type == .test, "Test manifest should only be set on test products")
+        if type == .executable {
+            guard modules.executables.count == 1 else {
+                throw InternalError("Executable products should have exactly one executable target.")
+            }
+        }
+        if testEntryPointPath != nil {
+            guard type == .test else {
+                throw InternalError("Test entry point path should only be set on test products")
+            }
         }
         self.name = name
         self.type = type
-        self._targets = .init(wrappedValue: targets)
-        self.testManifest = testManifest
+        self.identity = package.description.lowercased() + "_" + name
+        self.modules = modules
+        self.testEntryPointPath = testEntryPointPath
+    }
+}
+
+extension Product: Hashable {
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(ObjectIdentifier(self))
+    }
+
+    public static func == (lhs: Product, rhs: Product) -> Bool {
+        ObjectIdentifier(lhs) == ObjectIdentifier(rhs)
     }
 }
 
 /// The type of product.
-public enum ProductType: Equatable {
+public enum ProductType: Equatable, Hashable, Sendable {
 
     /// The type of library.
-    public enum LibraryType: String, Codable {
+    public enum LibraryType: String, Codable, Sendable {
 
         /// Static library.
         case `static`
@@ -70,16 +88,31 @@ public enum ProductType: Equatable {
     /// An executable product.
     case executable
 
+    /// An executable code snippet.
+    case snippet
+
+    /// An plugin product.
+    case plugin
+
     /// A test product.
     case test
+
+    /// A macro product.
+    case `macro`
+
+    public var isLibrary: Bool {
+        guard case .library = self else { return false }
+        return true
+    }
 }
+
 
 /// The products requested of a package.
 ///
-/// Any product which matches the filter will be used for dependency resolution, whereas unrequested products will be ingored.
+/// Any product which matches the filter will be used for dependency resolution, whereas unrequested products will be ignored.
 ///
-/// Requested products need not actually exist in the package. Under certain circumstances, the resolver may request names whose package of origin are unknown. The intended package will recognize and fullfill the request; packages that do not know what it is will simply ignore it.
-public enum ProductFilter: Equatable, Hashable {
+/// Requested products need not actually exist in the package. Under certain circumstances, the resolver may request names whose package of origin are unknown. The intended package will recognize and fulfill the request; packages that do not know what it is will simply ignore it.
+public enum ProductFilter: Equatable, Hashable, Sendable {
 
     /// All products, targets, and tests are requested.
     ///
@@ -145,17 +178,23 @@ extension ProductType: CustomStringConvertible {
         switch self {
         case .executable:
             return "executable"
+        case .snippet:
+            return "snippet"
         case .test:
             return "test"
         case .library(let type):
             switch type {
             case .automatic:
-                return "automatic"
+                return "library"
             case .dynamic:
-                return "dynamic"
+                return "dynamic library"
             case .static:
-                return "static"
+                return "static library"
             }
+        case .plugin:
+            return "plugin"
+        case .macro:
+            return "macro"
         }
     }
 }
@@ -175,7 +214,7 @@ extension ProductFilter: CustomStringConvertible {
 
 extension ProductType: Codable {
     private enum CodingKeys: String, CodingKey {
-        case library, executable, test
+        case library, executable, snippet, plugin, test, `macro`
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -186,8 +225,14 @@ extension ProductType: Codable {
             try unkeyedContainer.encode(a1)
         case .executable:
             try container.encodeNil(forKey: .executable)
+        case .snippet:
+            try container.encodeNil(forKey: .snippet)
+        case .plugin:
+            try container.encodeNil(forKey: .plugin)
         case .test:
             try container.encodeNil(forKey: .test)
+        case .macro:
+            try container.encodeNil(forKey: .macro)
         }
     }
 
@@ -205,6 +250,12 @@ extension ProductType: Codable {
             self = .test
         case .executable:
             self = .executable
+        case .snippet:
+            self = .snippet
+        case .plugin:
+            self = .plugin
+        case .macro:
+            self = .macro
         }
     }
 }
@@ -224,32 +275,10 @@ extension ProductFilter: Codable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        let optionalSet: Set<String>? = try container.decode([String]?.self).map { Set($0) }
-        if let set = optionalSet {
-            self = .specific(set)
-        } else {
+        if container.decodeNil() {
             self = .everything
-        }
-    }
-}
-
-// MARK: - JSON
-
-extension ProductFilter: JSONSerializable, JSONMappable {
-    public func toJSON() -> JSON {
-        switch self {
-        case .everything:
-            return "all".toJSON()
-        case .specific(let products):
-            return products.sorted().toJSON()
-        }
-    }
-
-    public init(json: JSON) throws {
-        if let products = try? [String](json: json) {
-            self = .specific(Set(products))
         } else {
-            self = .everything
+            self = .specific(Set(try container.decode([String].self)))
         }
     }
 }

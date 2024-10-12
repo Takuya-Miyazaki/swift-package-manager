@@ -1,62 +1,76 @@
-/*
- This source file is part of the Swift.org open source project
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2014-2020 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
- Copyright (c) 2014 - 2020 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
-*/
-
-import TSCBasic
+import Basics
+import Foundation
 
 /// Specifies a repository address.
-public struct RepositorySpecifier: Hashable, Codable {
-    /// The URL of the repository.
-    public let url: String
+public struct RepositorySpecifier: Hashable, Sendable {
+    public let location: Location
 
-    /// Create a specifier.
-    public init(url: String) {
-        self.url = url
+    public init(location: Location) {
+        self.location = location
     }
 
-    /// A unique identifier for this specifier.
-    ///
-    /// This identifier is suitable for use in a file system path, and
-    /// unique for each repository.
-    public var fileSystemIdentifier: String {
-        // Use first 8 chars of a stable hash.
-        let suffix = ByteString(encodingAsUTF8: url).sha256Checksum.prefix(8)
+    /// Create a specifier based on a path.
+    public init(path: AbsolutePath) {
+        self.init(location: .path(path))
+    }
 
-        return "\(basename)-\(suffix)"
+    /// Create a specifier on a URL.
+    public init(url: SourceControlURL) {
+        self.init(location: .url(url))
+    }
+
+    /// The location of the repository as string.
+    public var url: String {
+        switch self.location {
+        case .path(let path): return path.pathString
+        case .url(let url): return url.absoluteString
+        }
     }
 
     /// Returns the cleaned basename for the specifier.
     public var basename: String {
-        var basename = url.components(separatedBy: "/").last(where: { !$0.isEmpty }) ?? ""
+        // FIXME: this might be wrong
+        //var basename = self.url.pathComponents.dropFirst(1).last(where: { !$0.isEmpty }) ?? ""
+        var basename = (self.url as NSString).lastPathComponent
         if basename.hasSuffix(".git") {
             basename = String(basename.dropLast(4))
         }
+        if basename == "/" {
+            return ""
+        }
         return basename
+    }
+
+    public enum Location: Hashable, CustomStringConvertible, Sendable {
+        case path(AbsolutePath)
+        case url(SourceControlURL)
+
+        public var description: String {
+            switch self {
+            case .path(let path):
+                return path.pathString
+            case .url(let url):
+                return url.absoluteString
+            }
+        }
     }
 }
 
 extension RepositorySpecifier: CustomStringConvertible {
     public var description: String {
-        return url
-    }
-}
-
-extension RepositorySpecifier: JSONMappable, JSONSerializable {
-    public init(json: JSON) throws {
-        guard case .string(let url) = json else {
-            throw JSON.MapError.custom(key: nil, message: "expected string, got \(json)")
-        }
-        self.url = url
-    }
-
-    public func toJSON() -> JSON {
-        return .string(url)
+        return self.location.description
     }
 }
 
@@ -65,14 +79,15 @@ extension RepositorySpecifier: JSONMappable, JSONSerializable {
 /// This protocol defines the lower level interface used to to access
 /// repositories. High-level clients should access repositories via a
 /// `RepositoryManager`.
-public protocol RepositoryProvider {
+public protocol RepositoryProvider: Cancellable {
     /// Fetch the complete repository at the given location to `path`.
     ///
     /// - Parameters:
     ///   - repository: The specifier of the repository to fetch.
-    ///   - path: The destiantion path for the fetch.
+    ///   - path: The destination path for the fetch.
+    ///   - progress: Reports the progress of the current fetch operation.
     /// - Throws: If there is any error fetching the repository.
-    func fetch(repository: RepositorySpecifier, to path: AbsolutePath) throws
+    func fetch(repository: RepositorySpecifier, to path: AbsolutePath, progressHandler: FetchProgress.Handler?) throws
 
     /// Open the given repository.
     ///
@@ -85,9 +100,9 @@ public protocol RepositoryProvider {
     /// - Throws: If the repository is unable to be opened.
     func open(repository: RepositorySpecifier, at path: AbsolutePath) throws -> Repository
 
-    /// Clone a managed repository into a working copy at on the local file system.
+    /// Create a working copy from a managed repository.
     ///
-    /// Once complete, the repository can be opened using `openCheckout`. Note
+    /// Once complete, the repository can be opened using `openWorkingCopy`. Note
     /// that there is no requirement that the files have been materialized into
     /// the file system at the completion of this call, since it will always be
     /// followed by checking out the cloned working copy at a particular ref.
@@ -102,38 +117,33 @@ public protocol RepositoryProvider {
     ///   - editable: The checkout is expected to be edited by users.
     ///
     /// - Throws: If there is any error cloning the repository.
-    func cloneCheckout(
+    func createWorkingCopy(
         repository: RepositorySpecifier,
-        at sourcePath: AbsolutePath,
-        to destinationPath: AbsolutePath,
-        editable: Bool) throws
+        sourcePath: AbsolutePath,
+        at destinationPath: AbsolutePath,
+        editable: Bool) throws -> WorkingCheckout
 
     /// Returns true if a working repository exists at `path`
-    func checkoutExists(at path: AbsolutePath) throws -> Bool
+    func workingCopyExists(at path: AbsolutePath) throws -> Bool
 
     /// Open a working repository copy.
     ///
     /// - Parameters:
     ///   - path: The location of the repository on disk, at which the repository
-    ///     has previously been created via `cloneCheckout`.
-    func openCheckout(at path: AbsolutePath) throws -> WorkingCheckout
+    ///     has previously been created via `copyToWorkingDirectory`.
+    func openWorkingCopy(at path: AbsolutePath) throws -> WorkingCheckout
 
     /// Copies the repository at path `from` to path `to`.
     /// - Parameters:
     ///   - sourcePath: the source path.
     ///   - destinationPath: the destination  path.
     func copy(from sourcePath: AbsolutePath, to destinationPath: AbsolutePath) throws
-}
 
-extension RepositoryProvider {
-    public func checkoutExists(at path: AbsolutePath) throws -> Bool {
-        fatalError("Unimplemented")
-    }
+    /// Returns true if the directory is valid git location.
+    func isValidDirectory(_ directory: AbsolutePath) throws -> Bool
 
-    public func copy(from sourcePath: AbsolutePath, to destinationPath: AbsolutePath) throws {
-        fatalError("Unimplemented")
-    }
-
+    /// Returns true if the directory is valid git location for the specified repository
+    func isValidDirectory(_ directory: AbsolutePath, for repository: RepositorySpecifier) throws -> Bool
 }
 
 /// Abstract repository operations.
@@ -176,6 +186,11 @@ public protocol Repository {
     /// - Throws: If an error occurs while performing the fetch operation.
     func fetch() throws
 
+    /// Fetch and update the repository from its remote.
+    ///
+    /// - Throws: If an error occurs while performing the fetch operation.
+    func fetch(progress: FetchProgress.Handler?) throws
+
     /// Returns true if the given revision exists.
     func exists(revision: Revision) -> Bool
 
@@ -192,8 +207,30 @@ public protocol Repository {
     /// It is expected behavior that attempts to mutate the given FileSystem
     /// will fail or crash.
     ///
-    /// - Throws: If a error occurs accessing the revision.
+    /// - Throws: If an error occurs accessing the revision.
     func openFileView(revision: Revision) throws -> FileSystem
+
+    /// Open an immutable file system view for a particular tag.
+    ///
+    /// This view exposes the contents of the repository at the given revision
+    /// as a file system rooted inside the repository. The repository must
+    /// support opening multiple views concurrently, but the expectation is that
+    /// clients should be prepared for this to be inefficient when performing
+    /// interleaved accesses across separate views (i.e., the repository may
+    /// back the view by an actual file system representation of the
+    /// repository).
+    ///
+    /// It is expected behavior that attempts to mutate the given FileSystem
+    /// will fail or crash.
+    ///
+    /// - Throws: If an error occurs accessing the revision.
+    func openFileView(tag: String) throws -> FileSystem
+}
+
+extension Repository {
+    public func fetch(progress: FetchProgress.Handler?) throws {
+        try fetch()
+    }
 }
 
 /// An editable checkout of a repository (i.e. a working copy) on the local file
@@ -214,7 +251,7 @@ public protocol WorkingCheckout {
     func hasUnpushedCommits() throws -> Bool
 
     /// This check for any modified state of the repository and returns true
-    /// if there are uncommited changes.
+    /// if there are uncommitted changes.
     func hasUncommittedChanges() -> Bool
 
     /// Check out the given tag.
@@ -232,16 +269,10 @@ public protocol WorkingCheckout {
     func checkout(newBranch: String) throws
 
     /// Returns true if there is an alternative store in the checkout and it is valid.
-    func isAlternateObjectStoreValid() -> Bool
+    func isAlternateObjectStoreValid(expected: AbsolutePath) -> Bool
 
     /// Returns true if the file at `path` is ignored by `git`
     func areIgnored(_ paths: [AbsolutePath]) throws -> [Bool]
-}
-
-extension WorkingCheckout {
-    public func areIgnored(_ paths: [AbsolutePath]) throws -> [Bool] {
-        fatalError("Unimplemented")
-    }
 }
 
 /// A single repository revision.
@@ -258,11 +289,14 @@ public struct Revision: Hashable {
     }
 }
 
-extension Revision: JSONMappable {
-    public init(json: JSON) throws {
-        guard case .string(let identifier) = json else {
-            throw JSON.MapError.custom(key: nil, message: "expected string, got \(json)")
-        }
-        self.init(identifier: identifier)
-    }
+public protocol FetchProgress {
+    typealias Handler = (FetchProgress) -> Void
+
+    var message: String { get }
+    var step: Int { get }
+    var totalSteps: Int? { get }
+    /// The current download progress including the unit
+    var downloadProgress: String? { get }
+    /// The current download speed including the unit
+    var downloadSpeed: String? { get }
 }

@@ -1,177 +1,179 @@
-/*
- This source file is part of the Swift.org open source project
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2014-2024 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
- Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
-*/
-
+import Basics
+import PackageLoading
+import PackageModel
+import _InternalTestSupport
 import XCTest
 
-import TSCBasic
-import TSCUtility
-import SPMTestSupport
-import PackageModel
-import PackageLoading
+class PackageDescriptionLoadingTests: XCTestCase, ManifestLoaderDelegate {
+    lazy var manifestLoader = ManifestLoader(toolchain: try! UserToolchain.default, delegate: self)
+    var parsedManifest = ThreadSafeBox<AbsolutePath>()
 
-class PackageDescriptionLoadingTests: XCTestCase {
-    let manifestLoader = ManifestLoader(manifestResources: Resources.default)
+    func willLoad(packageIdentity: PackageModel.PackageIdentity, packageLocation: String, manifestPath: AbsolutePath) {
+        // noop
+    }
+
+    func didLoad(packageIdentity: PackageIdentity, packageLocation: String, manifestPath: AbsolutePath, duration: DispatchTimeInterval) {
+        // noop
+    }
+
+    func willParse(packageIdentity: PackageIdentity, packageLocation: String) {
+        // noop
+    }
+
+    func didParse(packageIdentity: PackageIdentity, packageLocation: String, duration: DispatchTimeInterval) {
+        // noop
+    }
+
+    func willCompile(packageIdentity: PackageIdentity, packageLocation: String, manifestPath: AbsolutePath) {
+        // noop
+    }
+
+    func didCompile(packageIdentity: PackageIdentity, packageLocation: String, manifestPath: AbsolutePath, duration: DispatchTimeInterval) {
+        // noop
+    }
+
+    func willEvaluate(packageIdentity: PackageIdentity, packageLocation: String, manifestPath: AbsolutePath) {
+        // noop
+    }
+
+    func didEvaluate(packageIdentity: PackageModel.PackageIdentity, packageLocation: String, manifestPath: AbsolutePath, duration: DispatchTimeInterval) {
+        parsedManifest.put(manifestPath)
+    }
 
     var toolsVersion: ToolsVersion {
         fatalError("implement in subclass")
     }
 
-    func loadManifestThrowing(
-        _ contents: ByteString,
+    func loadAndValidateManifest(
+        _ content: String,
         toolsVersion: ToolsVersion? = nil,
-        packageKind: PackageReference.Kind = .local,
-        line: UInt = #line,
-        body: (Manifest) -> Void
-    ) throws {
-        let toolsVersion = toolsVersion ?? self.toolsVersion
-        let fs = InMemoryFileSystem()
-        let manifestPath = AbsolutePath.root.appending(component: Manifest.filename)
-        try fs.writeFileContents(manifestPath, bytes: contents)
-        let m = try manifestLoader.load(
-            package: AbsolutePath.root,
-            baseURL: "/foo",
-            toolsVersion: toolsVersion,
-            packageKind: packageKind,
-            fileSystem: fs)
-        guard m.toolsVersion == toolsVersion else {
-            return XCTFail("Invalid manfiest version")
-        }
-        body(m)
-    }
-
-    func loadManifest(
-        _ contents: ByteString,
-        toolsVersion: ToolsVersion? = nil,
-        packageKind: PackageReference.Kind = .local,
-        line: UInt = #line,
-        body: (Manifest) -> Void
-    ) {
-        do {
-            let toolsVersion = toolsVersion ?? self.toolsVersion
-            try loadManifestThrowing(
-                contents,
-                toolsVersion: toolsVersion,
-                packageKind: packageKind,
-                line: line,
-                body: body
-            )
-        } catch ManifestParseError.invalidManifestFormat(let error, _) {
-            print(error)
-            XCTFail(file: #file, line: line)
-        } catch {
-            XCTFail("Unexpected error: \(error)", file: #file, line: line)
-        }
-    }
-
-    func XCTAssertManifestLoadNoThrows(
-        _ contents: ByteString,
-        toolsVersion: ToolsVersion? = nil,
-        packageKind: PackageReference.Kind = .local,
-        file: StaticString = #file,
-        line: UInt = #line,
-        onSuccess: ((Manifest, DiagnosticsEngineResult) -> Void)? = nil
-    ) {
-        let diagnostics = DiagnosticsEngine()
-
-        do {
-            let manifest = try loadManifest(
-                contents,
-                toolsVersion: toolsVersion ?? self.toolsVersion,
-                packageKind: packageKind,
-                diagnostics: diagnostics,
-                file: file,
-                line: line)
-
-            if let onSuccess = onSuccess {
-                DiagnosticsEngineTester(diagnostics) { result in
-                    onSuccess(manifest, result)
-                }
-            }
-        } catch {
-            XCTFail("Unexpected error: \(error)", file: file, line: line)
-        }
-    }
-
-    func XCTAssertManifestLoadThrows(
-        _ contents: ByteString,
-        toolsVersion: ToolsVersion? = nil,
-        packageKind: PackageReference.Kind = .local,
-        file: StaticString = #file,
-        line: UInt = #line,
-        onCatch: ((Error, DiagnosticsEngineResult) -> Void)? = nil
-    ) {
-        let diagnostics = DiagnosticsEngine()
-
-        do {
-            let manifest = try loadManifest(
-                contents,
-                toolsVersion: toolsVersion ?? self.toolsVersion,
-                packageKind: packageKind,
-                diagnostics: diagnostics,
-                file: file,
-                line: line)
-
-            XCTFail("Unexpected success: \(manifest)", file: file, line: line)
-        } catch {
-            if let onCatch = onCatch {
-                DiagnosticsEngineTester(diagnostics, file: file, line: line) { result in
-                    onCatch(error, result)
-                }
-            }
-        }
-    }
-
-    func XCTAssertManifestLoadThrows<E: Error & Equatable>(
-        _ expectedError: E,
-        _ contents: ByteString,
-        toolsVersion: ToolsVersion? = nil,
-        packageKind: PackageReference.Kind = .local,
-        file: StaticString = #file,
-        line: UInt = #line,
-        onCatch: ((DiagnosticsEngineResult) -> Void)? = nil
-    ) {
-        XCTAssertManifestLoadThrows(contents, toolsVersion: toolsVersion, file: file, line: line) { error, result in
-            if let typedError = error as? E, typedError == expectedError {
-                // Everything okay
-            } else {
-                XCTFail("Unexpected error: \(error)", file: file, line: line)
-            }
-
-            onCatch?(result)
-        }
-    }
-
-    func loadManifest(
-        _ contents: ByteString,
-        toolsVersion: ToolsVersion?,
-        packageKind: PackageReference.Kind,
-        diagnostics: DiagnosticsEngine?,
+        packageKind: PackageReference.Kind? = nil,
+        customManifestLoader: ManifestLoader? = nil,
+        observabilityScope: ObservabilityScope,
         file: StaticString = #file,
         line: UInt = #line
-    ) throws -> Manifest {
-        let toolsVersion = toolsVersion ?? self.toolsVersion
-        let fileSystem = InMemoryFileSystem()
-        let manifestPath = AbsolutePath.root.appending(component: Manifest.filename)
-        try fileSystem.writeFileContents(manifestPath, bytes: contents)
-        let manifest = try manifestLoader.load(
-            package: AbsolutePath.root,
-            baseURL: "/foo",
-            toolsVersion: toolsVersion,
-            packageKind: packageKind,
-            fileSystem: fileSystem,
-            diagnostics: diagnostics)
+    ) async throws -> (manifest: Manifest, diagnostics: [Basics.Diagnostic]) {
+        try await Self.loadAndValidateManifest(
+            content,
+            toolsVersion: toolsVersion ?? self.toolsVersion,
+            packageKind: packageKind ?? .fileSystem(.root),
+            manifestLoader: customManifestLoader ?? self.manifestLoader,
+            observabilityScope: observabilityScope,
+            file: file,
+            line: line
+        )
+    }
 
-        if manifest.toolsVersion != toolsVersion {
-            XCTFail("Invalid manifest version", file: file, line: line)
+    static func loadAndValidateManifest(
+        _ content: String,
+        toolsVersion: ToolsVersion,
+        packageKind: PackageReference.Kind,
+        manifestLoader: ManifestLoader,
+        observabilityScope: ObservabilityScope,
+        file: StaticString = #file,
+        line: UInt = #line
+    ) async throws -> (manifest: Manifest, diagnostics: [Basics.Diagnostic]) {
+        let packagePath: AbsolutePath
+        switch packageKind {
+        case .root(let path):
+            packagePath = path
+        case .fileSystem(let path):
+            packagePath = path
+        case .localSourceControl(let path):
+            packagePath = path
+        case .remoteSourceControl, .registry:
+            packagePath = .root
         }
 
-        return manifest
+        let toolsVersion = toolsVersion
+        let fileSystem = InMemoryFileSystem()
+        let manifestPath = packagePath.appending(component: Manifest.filename)
+        try fileSystem.writeFileContents(manifestPath, string: content)
+        let manifest = try await manifestLoader.load(
+            manifestPath: manifestPath,
+            packageKind: packageKind,
+            toolsVersion: toolsVersion,
+            fileSystem: fileSystem,
+            observabilityScope: observabilityScope
+        )
+
+        if manifest.toolsVersion != toolsVersion {
+            throw StringError("Invalid manifest version")
+        }
+
+        let validator = ManifestValidator(manifest: manifest, sourceControlValidator: NOOPManifestSourceControlValidator(), fileSystem: fileSystem)
+        let diagnostics = validator.validate()
+        return (manifest: manifest, diagnostics: diagnostics)
+    }
+}
+
+final class ManifestTestDelegate: ManifestLoaderDelegate {
+    private let loaded = ThreadSafeArrayStore<AbsolutePath>()
+    private let parsed = ThreadSafeArrayStore<AbsolutePath>()
+
+    func willLoad(packageIdentity: PackageModel.PackageIdentity, packageLocation: String, manifestPath: AbsolutePath) {
+        // noop
+    }
+
+    func didLoad(packageIdentity: PackageIdentity, packageLocation: String, manifestPath: AbsolutePath, duration: DispatchTimeInterval) {
+        self.loaded.append(manifestPath)
+    }
+
+    func willParse(packageIdentity: PackageIdentity, packageLocation: String) {
+        // noop
+    }
+
+    func didParse(packageIdentity: PackageIdentity, packageLocation: String, duration: DispatchTimeInterval) {
+        // noop
+    }
+
+    func willCompile(packageIdentity: PackageIdentity, packageLocation: String, manifestPath: AbsolutePath) {
+        // noop
+    }
+
+    func didCompile(packageIdentity: PackageIdentity, packageLocation: String, manifestPath: AbsolutePath, duration: DispatchTimeInterval) {
+        // noop
+    }
+
+    func willEvaluate(packageIdentity: PackageIdentity, packageLocation: String, manifestPath: AbsolutePath) {
+        // noop
+    }
+
+    func didEvaluate(packageIdentity: PackageIdentity, packageLocation: String, manifestPath: AbsolutePath, duration: DispatchTimeInterval) {
+        self.parsed.append(manifestPath)
+    }
+
+
+    func clear() {
+        self.loaded.clear()
+        self.parsed.clear()
+    }
+
+    func loaded(timeout: Duration) async throws -> [AbsolutePath] {
+        try await Task.sleep(for: timeout)
+        return self.loaded.get()
+    }
+
+    func parsed(timeout: Duration) async throws -> [AbsolutePath] {
+        try await Task.sleep(for: timeout)
+        return self.parsed.get()
+    }
+}
+
+fileprivate struct NOOPManifestSourceControlValidator: ManifestSourceControlValidator {
+    func isValidDirectory(_ path: AbsolutePath) throws -> Bool {
+        true
     }
 }

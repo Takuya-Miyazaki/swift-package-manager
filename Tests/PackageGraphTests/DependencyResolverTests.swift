@@ -1,22 +1,23 @@
-/*
- This source file is part of the Swift.org open source project
-
- Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
-*/
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2014-2017 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
 import XCTest
 
-import TSCBasic
 import PackageGraph
 import SourceControl
 
 import struct TSCUtility.Version
 
-import SPMTestSupport
+import _InternalTestSupport
 
 import PackageModel
 
@@ -40,12 +41,6 @@ private let v1_0Range: VersionSetSpecifier = .range("1.0.0" ..< "1.1.0")
 private let v1_1Range: VersionSetSpecifier = .range("1.1.0" ..< "1.2.0")
 private let v1_1_0Range: VersionSetSpecifier = .range("1.1.0" ..< "1.1.1")
 private let v2_0_0Range: VersionSetSpecifier = .range("2.0.0" ..< "2.0.1")
-
-extension PackageReference: Comparable {
-    public static func < (lhs: PackageReference, rhs: PackageReference) -> Bool {
-        return lhs.identity < rhs.identity
-    }
-}
 
 class DependencyResolverTests: XCTestCase {
     func testVersionSetSpecifier() {

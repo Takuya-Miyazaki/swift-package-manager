@@ -1,15 +1,16 @@
-/*
- This source file is part of the Swift.org open source project
-
- Copyright (c) 2020 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
- */
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2020 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
 @testable import Basics
-import TSCBasic
 import TSCTestSupport
 import XCTest
 
@@ -21,12 +22,12 @@ final class ConcurrencyHelpersTest: XCTestCase {
             let sync = DispatchGroup()
 
             var expected = [Int: Int]()
-            let lock = Lock()
+            let lock = NSLock()
 
             let cache = ThreadSafeKeyValueStore<Int, Int>()
             for index in 0 ..< 1000 {
                 self.queue.async(group: sync) {
-                    usleep(UInt32.random(in: 100 ... 300))
+                    Thread.sleep(forTimeInterval: Double.random(in: 100 ... 300) * 1.0e-6)
                     let value = Int.random(in: Int.min ..< Int.max)
                     lock.withLock {
                         expected[index] = value
@@ -40,7 +41,7 @@ final class ConcurrencyHelpersTest: XCTestCase {
                 }
             }
 
-            switch sync.wait(timeout: .now() + 1) {
+            switch sync.wait(timeout: .now() + .seconds(2)) {
             case .timedOut:
                 XCTFail("timeout")
             case .success:
@@ -56,12 +57,12 @@ final class ConcurrencyHelpersTest: XCTestCase {
             let sync = DispatchGroup()
 
             var expected = [Int]()
-            let lock = Lock()
+            let lock = NSLock()
 
             let cache = ThreadSafeArrayStore<Int>()
             for _ in 0 ..< 1000 {
                 self.queue.async(group: sync) {
-                    usleep(UInt32.random(in: 100 ... 300))
+                    Thread.sleep(forTimeInterval: Double.random(in: 100 ... 300) * 1.0e-6)
                     let value = Int.random(in: Int.min ..< Int.max)
                     lock.withLock {
                         expected.append(value)
@@ -70,7 +71,7 @@ final class ConcurrencyHelpersTest: XCTestCase {
                 }
             }
 
-            switch sync.wait(timeout: .now() + 1) {
+            switch sync.wait(timeout: .now() + .seconds(2)) {
             case .timedOut:
                 XCTFail("timeout")
             case .success:
@@ -86,14 +87,14 @@ final class ConcurrencyHelpersTest: XCTestCase {
             let sync = DispatchGroup()
 
             var winner: Int?
-            let lock = Lock()
+            let lock = NSLock()
 
             let serial = DispatchQueue(label: "testThreadSafeBoxSerial")
 
             let cache = ThreadSafeBox<Int>()
             for index in 0 ..< 1000 {
                 self.queue.async(group: sync) {
-                    usleep(UInt32.random(in: 100 ... 300))
+                    Thread.sleep(forTimeInterval: Double.random(in: 100 ... 300) * 1.0e-6)
                     serial.async(group: sync) {
                         lock.withLock {
                             if winner == nil {
@@ -107,7 +108,7 @@ final class ConcurrencyHelpersTest: XCTestCase {
                 }
             }
 
-            switch sync.wait(timeout: .now() + 1) {
+            switch sync.wait(timeout: .now() + .seconds(2)) {
             case .timedOut:
                 XCTFail("timeout")
             case .success:

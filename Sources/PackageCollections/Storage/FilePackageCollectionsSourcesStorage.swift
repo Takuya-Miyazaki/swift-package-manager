@@ -1,136 +1,84 @@
-/*
- This source file is part of the Swift.org open source project
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2020-2021 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
- Copyright (c) 2020-2021 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
- */
-
+import _Concurrency
 import Basics
 import Dispatch
 import struct Foundation.Data
 import class Foundation.JSONDecoder
 import class Foundation.JSONEncoder
 import struct Foundation.URL
-import TSCBasic
 
 struct FilePackageCollectionsSourcesStorage: PackageCollectionsSourcesStorage {
     let fileSystem: FileSystem
     let path: AbsolutePath
 
-    private let diagnosticsEngine: DiagnosticsEngine?
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
-    private let queue = DispatchQueue(label: "org.swift.swiftpm.FilePackageCollectionsSourcesStorage")
-
-    init(fileSystem: FileSystem = localFileSystem, path: AbsolutePath? = nil, diagnosticsEngine: DiagnosticsEngine? = nil) {
+    init(fileSystem: FileSystem, path: AbsolutePath? = nil) {
         self.fileSystem = fileSystem
 
-        let name = "collections"
-        self.path = path ?? fileSystem.dotSwiftPM.appending(components: "config", "\(name).json")
-        self.diagnosticsEngine = diagnosticsEngine
+        self.path = path ?? (try? fileSystem.swiftPMConfigurationDirectory.appending("collections.json")) ?? .root
         self.encoder = JSONEncoder.makeWithDefaults()
         self.decoder = JSONDecoder.makeWithDefaults()
     }
 
-    func list(callback: @escaping (Result<[Model.CollectionSource], Error>) -> Void) {
-        self.queue.async {
-            do {
-                let sources = try self.withLock {
-                    try self.loadFromDisk()
-                }
-                callback(.success(sources))
-            } catch {
-                callback(.failure(error))
-            }
+    func list() async throws -> [PackageCollectionsModel.CollectionSource] {
+        try self.withLock {
+            try self.loadFromDisk()
         }
     }
 
-    func add(source: Model.CollectionSource,
-             order: Int?,
-             callback: @escaping (Result<Void, Error>) -> Void) {
-        self.queue.async {
-            do {
-                try self.withLock {
-                    var sources = try self.loadFromDisk()
-                    sources = sources.filter { $0 != source }
-                    let order = order.flatMap { $0 >= 0 && $0 < sources.endIndex ? order : sources.endIndex } ?? sources.endIndex
-                    sources.insert(source, at: order)
-                    try self.saveToDisk(sources)
-                }
-                callback(.success(()))
-            } catch {
-                callback(.failure(error))
-            }
+    func add(source: PackageCollectionsModel.CollectionSource, order: Int? = nil) async throws {
+        try self.withLock {
+            var sources = try self.loadFromDisk()
+            sources = sources.filter { $0 != source }
+            let order = order.flatMap { $0 >= 0 && $0 < sources.endIndex ? order : sources.endIndex } ?? sources.endIndex
+            sources.insert(source, at: order)
+            try self.saveToDisk(sources)
         }
     }
 
-    func remove(source: Model.CollectionSource,
-                callback: @escaping (Result<Void, Error>) -> Void) {
-        self.queue.async {
-            do {
-                try self.withLock {
-                    var sources = try self.loadFromDisk()
-                    sources = sources.filter { $0 != source }
-                    try self.saveToDisk(sources)
-                }
-                callback(.success(()))
-            } catch {
-                callback(.failure(error))
-            }
+    func remove(source: PackageCollectionsModel.CollectionSource) async throws {
+        try self.withLock {
+            var sources = try self.loadFromDisk()
+            sources = sources.filter { $0 != source }
+            try self.saveToDisk(sources)
         }
     }
 
-    func move(source: Model.CollectionSource,
-              to order: Int,
-              callback: @escaping (Result<Void, Error>) -> Void) {
-        self.queue.async {
-            do {
-                try self.withLock {
-                    var sources = try self.loadFromDisk()
-                    sources = sources.filter { $0 != source }
-                    let order = order >= 0 && order < sources.endIndex ? order : sources.endIndex
-                    sources.insert(source, at: order)
-                    try self.saveToDisk(sources)
-                }
-                callback(.success(()))
-            } catch {
-                callback(.failure(error))
-            }
+    func move(source: PackageCollectionsModel.CollectionSource, to order: Int) async throws {
+        try self.withLock {
+            var sources = try self.loadFromDisk()
+            sources = sources.filter { $0 != source }
+            let order = order >= 0 && order < sources.endIndex ? order : sources.endIndex
+            sources.insert(source, at: order)
+            try self.saveToDisk(sources)
         }
     }
 
-    func exists(source: Model.CollectionSource,
-                callback: @escaping (Result<Bool, Error>) -> Void) {
-        self.queue.async {
-            do {
-                let sources = try self.withLock {
-                    try self.loadFromDisk()
-                }
-                callback(.success(sources.contains(source)))
-            } catch {
-                callback(.failure(error))
-            }
-        }
+    func exists(source: PackageCollectionsModel.CollectionSource) async throws -> Bool {
+        try self.withLock {
+            try self.loadFromDisk()
+        }.contains(source)
     }
 
-    func update(source: PackageCollectionsModel.CollectionSource,
-                callback: @escaping (Result<Void, Error>) -> Void) {
-        self.queue.async {
-            do {
-                try self.withLock {
-                    var sources = try self.loadFromDisk()
-                    if let index = sources.firstIndex(where: { $0 == source }) {
-                        sources[index] = source
-                        try self.saveToDisk(sources)
-                    }
-                }
-                callback(.success(()))
-            } catch {
-                callback(.failure(error))
+    func update(source: PackageCollectionsModel.CollectionSource) async throws {
+        try self.withLock {
+            var sources = try self.loadFromDisk()
+            if let index = sources.firstIndex(where: { $0 == source }) {
+                sources[index] = source
+                try self.saveToDisk(sources)
             }
         }
     }
@@ -139,11 +87,11 @@ struct FilePackageCollectionsSourcesStorage: PackageCollectionsSourcesStorage {
         guard self.fileSystem.exists(self.path) else {
             return .init()
         }
-        let buffer = try fileSystem.readFileContents(self.path).contents
-        guard buffer.count > 0 else {
+        let data: Data = try fileSystem.readFileContents(self.path)
+        guard data.count > 0 else {
             return .init()
         }
-        let container = try decoder.decode(StorageModel.Container.self, from: Data(buffer))
+        let container = try decoder.decode(StorageModel.Container.self, from: data)
         return try container.sources()
     }
 
@@ -153,7 +101,7 @@ struct FilePackageCollectionsSourcesStorage: PackageCollectionsSourcesStorage {
         }
         let container = StorageModel.Container(sources)
         let buffer = try encoder.encode(container)
-        try self.fileSystem.writeFileContents(self.path, bytes: ByteString(buffer))
+        try self.fileSystem.writeFileContents(self.path, data: buffer)
     }
 
     private func withLock<T>(_ body: () throws -> T) throws -> T {
@@ -187,6 +135,7 @@ private enum StorageModel {
         let type: String
         let value: String
         let isTrusted: Bool?
+        let skipSignatureCheck: Bool?
     }
 
     enum SourceType: String {
@@ -204,7 +153,7 @@ private extension Model.CollectionSource {
 
         switch from.type {
         case StorageModel.SourceType.json.rawValue:
-            self.init(type: .json, url: url, isTrusted: from.isTrusted)
+            self.init(type: .json, url: url, isTrusted: from.isTrusted, skipSignatureCheck: from.skipSignatureCheck ?? false)
         default:
             throw SerializationError.unknownType(from.type)
         }
@@ -213,7 +162,8 @@ private extension Model.CollectionSource {
     func source() -> StorageModel.Source {
         switch self.type {
         case .json:
-            return .init(type: StorageModel.SourceType.json.rawValue, value: self.url.absoluteString, isTrusted: self.isTrusted)
+            return .init(type: StorageModel.SourceType.json.rawValue, value: self.url.absoluteString,
+                         isTrusted: self.isTrusted, skipSignatureCheck: self.skipSignatureCheck)
         }
     }
 }

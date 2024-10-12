@@ -1,29 +1,28 @@
-/*
- This source file is part of the Swift.org open source project
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2014-2024 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
- Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
-*/
-
+import Basics
+import SourceControl
+import _InternalTestSupport
 import XCTest
 
-import TSCBasic
-import SourceControl
-import TSCUtility
-
-import SPMTestSupport
-
-class InMemoryGitRepositoryTests: XCTestCase {
+final class InMemoryGitRepositoryTests: XCTestCase {
     func testBasics() throws {
         let fs = InMemoryFileSystem()
         let repo = InMemoryGitRepository(path: .root, fs: fs)
 
-        try repo.createDirectory(AbsolutePath("/new-dir/subdir"), recursive: true)
+        try repo.createDirectory("/new-dir/subdir", recursive: true)
         XCTAssertTrue(!repo.hasUncommittedChanges())
-        let filePath = AbsolutePath("/new-dir/subdir").appending(component: "new-file.txt")
+        let filePath = AbsolutePath("/new-dir/subdir").appending("new-file.txt")
 
         try repo.writeFileContents(filePath, bytes: "one")
         XCTAssertEqual(try repo.readFileContents(filePath), "one")
@@ -77,9 +76,9 @@ class InMemoryGitRepositoryTests: XCTestCase {
         let v2 = "2.0.0"
         let repo = InMemoryGitRepository(path: .root, fs: InMemoryFileSystem())
 
-        let specifier = RepositorySpecifier(url: "/foo")
-        try repo.createDirectory(AbsolutePath("/new-dir/subdir"), recursive: true)
-        let filePath = AbsolutePath("/new-dir/subdir").appending(component: "new-file.txt")
+        let specifier = RepositorySpecifier(path: "/Foo")
+        try repo.createDirectory("/new-dir/subdir", recursive: true)
+        let filePath = AbsolutePath("/new-dir/subdir").appending("new-file.txt")
         try repo.writeFileContents(filePath, bytes: "one")
         try repo.commit()
         try repo.tag(name: v1)
@@ -100,14 +99,14 @@ class InMemoryGitRepositoryTests: XCTestCase {
         XCTAssert(fooRepo.exists(revision: try fooRepo.resolveRevision(tag: v1)))
 
         let fooCheckoutPath = AbsolutePath("/fooCheckout")
-        XCTAssertFalse(try provider.checkoutExists(at: fooCheckoutPath))
-        try provider.cloneCheckout(repository: specifier, at: fooRepoPath, to: fooCheckoutPath, editable: false)
-        XCTAssertTrue(try provider.checkoutExists(at: fooCheckoutPath))
-        let fooCheckout = try provider.openCheckout(at: fooCheckoutPath)
+        XCTAssertFalse(try provider.workingCopyExists(at: fooCheckoutPath))
+        _ = try provider.createWorkingCopy(repository: specifier, sourcePath: fooRepoPath, at: fooCheckoutPath, editable: false)
+        XCTAssertTrue(try provider.workingCopyExists(at: fooCheckoutPath))
+        let fooCheckout = try provider.openWorkingCopy(at: fooCheckoutPath)
 
         XCTAssertEqual(try fooCheckout.getTags().sorted(), [v1, v2])
         XCTAssert(fooCheckout.exists(revision: try fooCheckout.getCurrentRevision()))
-        let checkoutRepo = provider.openRepo(at: fooCheckoutPath)
+        let checkoutRepo = try provider.openRepo(at: fooCheckoutPath)
 
         try fooCheckout.checkout(tag: v1)
         XCTAssertEqual(try checkoutRepo.readFileContents(filePath), "one")

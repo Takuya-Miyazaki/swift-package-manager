@@ -1,4 +1,5 @@
 .build
+.index-build
 DerivedData
 /.previous-build
 xcuserdata
@@ -15,3 +16,7 @@ Utilities/Docker/*.tar.gz
 Package.resolved
 /build
 *.pyc
+.docc-build
+.vscode
+Utilities/InstalledSwiftPMConfiguration/config.json
+.devcontainer

@@ -1,284 +1,242 @@
-/*
- This source file is part of the Swift.org open source project
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2014-2020 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
- Copyright (c) 2014 - 2020 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
- */
-
-import TSCBasic
+import Basics
 import PackageGraph
 import PackageModel
 import SourceControl
-import TSCUtility
 
-/// An individual managed dependency.
-///
-/// Each dependency will have a checkout containing the sources at a
-/// particular revision, and may have an associated version.
-public final class ManagedDependency {
+import struct TSCUtility.Version
 
-    /// Represents the state of the managed dependency.
-    public enum State: Equatable {
+extension Workspace {
+    /// An individual managed dependency.
+    ///
+    /// Each dependency will have a checkout containing the sources at a
+    /// particular revision, and may have an associated version.
+    public struct ManagedDependency: Equatable {
+        /// Represents the state of the managed dependency.
+        public indirect enum State: Equatable, CustomStringConvertible {
+            /// The dependency is a local package on the file system.
+            case fileSystem(AbsolutePath)
 
-        /// The dependency is a managed checkout.
-        case checkout(CheckoutState)
+            /// The dependency is a managed source control checkout.
+            case sourceControlCheckout(CheckoutState)
 
-        /// The dependency is in edited state.
+            /// The dependency is downloaded from a registry.
+            case registryDownload(version: Version)
+
+            /// The dependency is in edited state.
+            ///
+            /// If the path is non-nil, the dependency is managed by a user and is
+            /// located at the path. In other words, this dependency is being used
+            /// for top of the tree style development.
+            case edited(basedOn: ManagedDependency?, unmanagedPath: AbsolutePath?)
+
+            case custom(version: Version, path: AbsolutePath)
+
+            public var description: String {
+                switch self {
+                case .fileSystem(let path):
+                    return "fileSystem (\(path))"
+                case .sourceControlCheckout(let checkoutState):
+                    return "sourceControlCheckout (\(checkoutState))"
+                case .registryDownload(let version):
+                    return "registryDownload (\(version))"
+                case .edited:
+                    return "edited"
+                case .custom:
+                    return "custom"
+                }
+            }
+        }
+
+        /// The package reference.
+        public let packageRef: PackageReference
+
+        /// The state of the managed dependency.
+        public let state: State
+
+        /// The checked out path of the dependency on disk, relative to the workspace checkouts path.
+        public let subpath: RelativePath
+
+        internal init(
+            packageRef: PackageReference,
+            state: State,
+            subpath: RelativePath
+        ) {
+            self.packageRef = packageRef
+            self.subpath = subpath
+            self.state = state
+        }
+
+        /// Create an editable managed dependency based on a dependency which
+        /// was *not* in edit state.
         ///
-        /// If the path is non-nil, the dependency is managed by a user and is
-        /// located at the path. In other words, this dependency is being used
-        /// for top of the tree style development.
-        case edited(AbsolutePath?)
-
-        // The dependency is a local package.
-        case local
-
-        /// Returns true if state is checkout.
-        var isCheckout: Bool {
-            if case .checkout = self { return true }
-            return false
+        /// - Parameters:
+        ///     - subpath: The subpath inside the editable directory.
+        ///     - unmanagedPath: A custom absolute path instead of the subpath.
+        public func edited(subpath: RelativePath, unmanagedPath: AbsolutePath?) throws -> ManagedDependency {
+            guard case .sourceControlCheckout =  self.state else {
+                throw InternalError("invalid dependency state: \(self.state)")
+            }
+            return ManagedDependency(
+                packageRef: self.packageRef,
+                state: .edited(basedOn: self, unmanagedPath: unmanagedPath),
+                subpath: subpath
+            )
         }
-    }
 
-    /// The package reference.
-    public let packageRef: PackageReference
-
-    /// The state of the managed dependency.
-    public let state: State
-
-    /// Returns true if the dependency is edited.
-    public var isEdited: Bool {
-        switch state {
-        case .checkout, .local:
-            return false
-        case .edited:
-            return true
+        /// Create a dependency present locally on the filesystem.
+        public static func fileSystem(
+            packageRef: PackageReference
+        ) throws -> ManagedDependency {
+            switch packageRef.kind {
+            case .root(let path), .fileSystem(let path), .localSourceControl(let path):
+                return try ManagedDependency(
+                    packageRef: packageRef,
+                    state: .fileSystem(path),
+                    // FIXME: This is just a fake entry, we should fix it.
+                    subpath: RelativePath(validating: packageRef.identity.description)
+                )
+            default:
+                throw InternalError("invalid package type: \(packageRef.kind)")
+            }
         }
-    }
 
-    public var checkoutState: CheckoutState? {
-        if case .checkout(let checkoutState) = state {
-            return checkoutState
+        /// Create a source control dependency checked out
+        public static func sourceControlCheckout(
+            packageRef: PackageReference,
+            state: CheckoutState,
+            subpath: RelativePath
+        ) throws -> ManagedDependency {
+            switch packageRef.kind {
+            case .localSourceControl, .remoteSourceControl:
+                return ManagedDependency(
+                    packageRef: packageRef,
+                    state: .sourceControlCheckout(state),
+                    subpath: subpath
+                )
+            default:
+                throw InternalError("invalid package type: \(packageRef.kind)")
+            }
         }
-        return nil
-    }
 
-    /// The checked out path of the dependency on disk, relative to the workspace checkouts path.
-    public let subpath: RelativePath
+        /// Create a registry dependency downloaded
+        public static func registryDownload(
+            packageRef: PackageReference,
+            version: Version,
+            subpath: RelativePath
+        ) throws -> ManagedDependency {
+            guard case .registry = packageRef.kind else {
+                throw InternalError("invalid package type: \(packageRef.kind)")
+            }
+            return ManagedDependency(
+                packageRef: packageRef,
+                state: .registryDownload(version: version),
+                subpath: subpath
+            )
+        }
 
-    /// A dependency which in editable state is based on a dependency from
-    /// which it edited from.
-    ///
-    /// This information is useful so it can be restored when users
-    /// unedit a package.
-    public internal(set) var basedOn: ManagedDependency?
-
-    public init(
-        packageRef: PackageReference,
-        subpath: RelativePath,
-        checkoutState: CheckoutState
-    ) {
-        self.packageRef = packageRef
-        self.state = .checkout(checkoutState)
-        self.basedOn = nil
-        self.subpath = subpath
-    }
-
-    /// Create a dependency present locally on the filesystem.
-    public static func local(
-        packageRef: PackageReference
-    ) -> ManagedDependency {
-        return ManagedDependency(
-            packageRef: packageRef,
-            state: .local,
-            // FIXME: This is just a fake entry, we should fix it.
-            subpath: RelativePath(packageRef.identity.description),
-            basedOn: nil
-        )
-    }
-
-    private init(
-        packageRef: PackageReference,
-        state: State,
-        subpath: RelativePath,
-        basedOn: ManagedDependency?
-    ) {
-        self.packageRef = packageRef
-        self.subpath = subpath
-        self.basedOn = basedOn
-        self.state = state
-    }
-
-    private init(
-        basedOn dependency: ManagedDependency,
-        subpath: RelativePath,
-        unmanagedPath: AbsolutePath?
-    ) {
-        assert(dependency.state.isCheckout)
-        self.basedOn = dependency
-        self.packageRef = dependency.packageRef
-        self.subpath = subpath
-        self.state = .edited(unmanagedPath)
-    }
-
-    /// Create an editable managed dependency based on a dependency which
-    /// was *not* in edit state.
-    ///
-    /// - Parameters:
-    ///     - subpath: The subpath inside the editables directory.
-    ///     - unmanagedPath: A custom absolute path instead of the subpath.
-    public func editedDependency(subpath: RelativePath, unmanagedPath: AbsolutePath?) -> ManagedDependency {
-        return ManagedDependency(basedOn: self, subpath: subpath, unmanagedPath: unmanagedPath)
+        /// Create an edited dependency
+        public static func edited(
+            packageRef: PackageReference,
+            subpath: RelativePath,
+            basedOn: ManagedDependency?,
+            unmanagedPath: AbsolutePath?
+        ) -> ManagedDependency {
+            return ManagedDependency(
+                packageRef: packageRef,
+                state: .edited(basedOn: basedOn, unmanagedPath: unmanagedPath),
+                subpath: subpath
+            )
+        }
     }
 }
 
-// MARK: - JSON
-
-extension ManagedDependency: JSONMappable, JSONSerializable, CustomStringConvertible {
-    public convenience init(json: JSON) throws {
-        try self.init(
-            packageRef: json.get("packageRef"),
-            state: json.get("state"),
-            subpath: RelativePath(json.get("subpath")),
-            basedOn: json.get("basedOn")
-        )
-    }
-
-    public func toJSON() -> JSON {
-        return .init([
-            "packageRef": packageRef.toJSON(),
-            "subpath": subpath,
-            "basedOn": basedOn.toJSON(),
-            "state": state
-        ])
-    }
-
+extension Workspace.ManagedDependency: CustomStringConvertible {
     public var description: String {
-        return "<ManagedDependency: \(packageRef.name) \(state)>"
+        return "<ManagedDependency: \(self.packageRef.identity) \(self.state)>"
     }
 }
 
-extension ManagedDependency.State: JSONMappable, JSONSerializable {
-    public func toJSON() -> JSON {
-        switch self {
-        case .checkout(let checkoutState):
-            return .init([
-                "name": "checkout",
-                "checkoutState": checkoutState,
-            ])
-        case .edited(let path):
-            return .init([
-                "name": "edited",
-                "path": path.toJSON(),
-            ])
-        case .local:
-            return .init([
-                "name": "local",
-            ])
-        }
-    }
+// MARK: - ManagedDependencies
 
-    public init(json: JSON) throws {
-        let name: String = try json.get("name")
-        switch name {
-        case "checkout":
-            self = try .checkout(json.get("checkoutState"))
-        case "edited":
-            let path: String? = json.get("path")
-            self = .edited(path.map({AbsolutePath($0)}))
-        case "local":
-            self = .local
-        default:
-            throw JSON.MapError.custom(key: nil, message: "Invalid state \(name)")
-        }
-    }
+extension Workspace {
+    /// A collection of managed dependencies.
+    final public class ManagedDependencies {
+        private var dependencies: [PackageIdentity: ManagedDependency]
 
-    public var description: String {
-        switch self {
-        case .checkout(let checkout):
-            return "\(checkout)"
-        case .edited:
-            return "edited"
-        case .local:
-            return "local"
+        init() {
+            self.dependencies = [:]
+        }
+
+        init(_ dependencies: [ManagedDependency]) throws {
+            // rdar://86857825 do not use Dictionary(uniqueKeysWithValues:) as it can crash the process when input is incorrect such as in older versions of SwiftPM
+            self.dependencies = [:]
+            for dependency in dependencies {
+                if self.dependencies[dependency.packageRef.identity] != nil {
+                    throw StringError("\(dependency.packageRef.identity) already exists in managed dependencies")
+                }
+                self.dependencies[dependency.packageRef.identity] = dependency
+            }
+        }
+
+        public subscript(identity: PackageIdentity) -> ManagedDependency? {
+            return self.dependencies[identity]
+        }
+
+        // When loading manifests in Workspace, there are cases where we must also compare the location
+        // as it may attempt to load manifests for dependencies that have the same identity but from a different location
+        // (e.g. dependency is changed to a fork with the same identity)
+        public subscript(comparingLocation package: PackageReference) -> ManagedDependency? {
+            if let dependency = self.dependencies[package.identity], dependency.packageRef.equalsIncludingLocation(package) {
+                return dependency
+            }
+            return .none
+        }
+
+        public func add(_ dependency: ManagedDependency) {
+            self.dependencies[dependency.packageRef.identity] = dependency
+        }
+
+        public func remove(_ identity: PackageIdentity) {
+            self.dependencies[identity] = nil
         }
     }
 }
 
-// MARK: -
-
-/// A collection of managed dependencies.
-public final class ManagedDependencies {
-
-    /// The dependencies keyed by the package URL.
-    private var dependencyMap: [String: ManagedDependency]
-
-    init(dependencyMap: [String: ManagedDependency] = [:]) {
-        self.dependencyMap = dependencyMap
-    }
-
-    public subscript(forURL url: String) -> ManagedDependency? {
-        dependencyMap[url]
-    }
-
-    public subscript(forIdentity identity: PackageIdentity) -> ManagedDependency? {
-        dependencyMap.values.first(where: { $0.packageRef.identity == identity })
-    }
-
-    public subscript(forNameOrIdentity nameOrIdentity: String) -> ManagedDependency? {
-        let lowercasedNameOrIdentity = nameOrIdentity.lowercased()
-        return dependencyMap.values.first(where: {
-            $0.packageRef.name == nameOrIdentity || $0.packageRef.identity.description == lowercasedNameOrIdentity
-        })
-    }
-
-    public func add(_ dependency: ManagedDependency) {
-        dependencyMap[dependency.packageRef.location] = dependency
-    }
-
-    public func remove(forURL url: String) {
-        dependencyMap[url] = nil
-    }
-}
-
-extension ManagedDependencies: Collection {
-    public typealias Index = Dictionary<String, ManagedDependency>.Index
-    public typealias Element = ManagedDependency
+extension Workspace.ManagedDependencies: Collection {
+    public typealias Index = Dictionary<PackageIdentity, Workspace.ManagedDependency>.Index
+    public typealias Element = Workspace.ManagedDependency
 
     public var startIndex: Index {
-        dependencyMap.startIndex
+        self.dependencies.startIndex
     }
 
     public var endIndex: Index {
-        dependencyMap.endIndex
+        self.dependencies.endIndex
     }
 
     public subscript(index: Index) -> Element {
-        dependencyMap[index].value
+        self.dependencies[index].value
     }
 
     public func index(after index: Index) -> Index {
-        dependencyMap.index(after: index)
+        self.dependencies.index(after: index)
     }
 }
 
-extension ManagedDependencies: JSONMappable, JSONSerializable {
-    public convenience init(json: JSON) throws {
-        let dependencies = try Array<ManagedDependency>(json: json)
-        let dependencyMap = Dictionary(uniqueKeysWithValues: dependencies.lazy.map({ ($0.packageRef.location, $0) }))
-        self.init(dependencyMap: dependencyMap)
-    }
-
-    public func toJSON() -> JSON {
-        dependencyMap.values.toJSON()
-    }
-}
-
-extension ManagedDependencies: CustomStringConvertible {
+extension Workspace.ManagedDependencies: CustomStringConvertible {
     public var description: String {
-        "<ManagedDependencies: \(Array(dependencyMap.values))>"
+        "<ManagedDependencies: \(Array(self.dependencies.values))>"
     }
 }

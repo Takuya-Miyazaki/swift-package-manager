@@ -200,7 +200,7 @@ let package = Package(
         .library(name: "PaperDynamic", type: .dynamic, targets: ["Paper"]),
     ],
     dependencies: [
-        .package(url: "http://example.com.com/ExamplePackage/ExamplePackage", from: "1.2.3"),
+        .package(url: "http://example.com/ExamplePackage/ExamplePackage", from: "1.2.3"),
         .package(url: "http://some/other/lib", .exact("1.2.3")),
     ],
     targets: [
@@ -235,7 +235,7 @@ let package = Package(
 /// - Parameters:
 ///     - name: The name of the library product.
 ///     - type: The optional type of the library that is used to determine how to link to the library.
-///         Leave this parameter unspecified to let to let the Swift Package Manager choose between static or dynamic linking (recommended).
+///         Leave this parameter unspecified to let the Swift Package Manager choose between static or dynamic linking (recommended).
 ///         If you do not support both linkage types, use `.static` or `.dynamic` for this parameter. 
 ///     - targets: The targets that are bundled into a library product.
 static func library(name: String, type: Product.Library.LibraryType? = nil, targets: [String]) -> Product
@@ -295,6 +295,26 @@ static func package(url: String, from version: Version) -> Package.Dependency
 ///     - url: The valid Git URL of the package.
 ///     - requirement: A dependency requirement. See static methods on `Package.Dependency.Requirement` for available options.
 static func package(url: String, _ requirement: Package.Dependency.Requirement) -> Package.Dependency
+
+/// Adds a remote package dependency given a branch requirement.
+///
+///    .package(url: "https://example.com/example-package.git", branch: "main"),
+///
+/// - Parameters:
+///     - name: The name of the package, or nil to deduce it from the URL.
+///     - url: The valid Git URL of the package.
+///     - branch: A dependency requirement. See static methods on `Package.Dependency.Requirement` for available options.
+static func package(name: String? = nil, url: String, branch: String) -> Package.Dependency
+
+/// Adds a remote package dependency given a revision requirement.
+///
+///    .package(url: "https://example.com/example-package.git", revision: "aa681bd6c61e22df0fd808044a886fc4a7ed3a65"),
+///
+/// - Parameters:
+///     - name: The name of the package, or nil to deduce it from the URL.
+///     - url: The valid Git URL of the package.
+///     - revision: A dependency requirement. See static methods on `Package.Dependency.Requirement` for available options.
+static func package(name: String? = nil, url: String, revision: String) -> Package.Dependency
 
 /// Add a package dependency starting with a specific minimum version, up to
 /// but not including a specified maximum version.
@@ -360,7 +380,7 @@ Selecting the version requirement is the recommended way to add a package depend
 
 Select the name of the branch for your package dependency to follow.
 Use branch-based dependencies when you're developing multiple packages
-n tandem or when you don't want to publish versions of your package dependencies.
+in tandem or when you don't want to publish versions of your package dependencies.
 
 Note that packages which use branch-based dependency requirements
 can't be added as dependencies to packages that use version-based dependency
@@ -456,7 +476,7 @@ A package version is a three period-separated integer, for example `1.0.0`. It m
 that your package behaves in a predictable manner once developers update their
 package dependency to a newer version. To achieve predictability, the semantic versioning specification proposes a set of rules and
 requirements that dictate how version numbers are assigned and incremented. To learn more about the semantic versioning specification, visit
-[semver.org](www.semver.org).
+[semver.org](https://semver.org).
 
 **The Major Version**
 
@@ -740,7 +760,7 @@ For example, you don’t need to declare XIB files, storyboards, Core Data file 
 as resources in your package manifest.
 
 However, you must explicitly declare other file types—for example image files—as resources
-using the `process(_:localization:)`` or `copy(_:)`` rules.
+using the `process(_:localization:)` or `copy(_:)` rules.
 
 Alternatively, exclude resource files from a target
 by passing them to the target initializer’s `exclude` parameter.
@@ -1092,6 +1112,7 @@ enum CXXLanguageStandard {
     case cxx17 = "c++17"
     case cxx1z = "c++1z"
     case cxx20 = "c++20"
+    case cxx2b = "c++2b"
     case gnucxx98 = "gnu++98"
     case gnucxx03 = "gnu++03"
     case gnucxx11 = "gnu++11"
@@ -1099,5 +1120,6 @@ enum CXXLanguageStandard {
     case gnucxx17 = "gnu++17"
     case gnucxx1z = "gnu++1z"
     case gnucxx20 = "gnu++20"
+    case gnucxx2b = "gnu++2b"
 }
 ```

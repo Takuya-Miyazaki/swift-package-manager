@@ -1,19 +1,23 @@
-/*
- This source file is part of the Swift.org open source project
- Copyright (c) 2020 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
- */
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2020-2021 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
-import TSCBasic
-
+import class Foundation.NSLock
 import PackageModel
 
 struct Trie<Document: Hashable> {
     private typealias Node = TrieNode<Character, Document>
 
     private let root: Node
+    private let lock = NSLock()
 
     init() {
         self.root = Node()
@@ -23,17 +27,19 @@ struct Trie<Document: Hashable> {
     func insert(word: String, foundIn document: Document) {
         guard !word.isEmpty else { return }
 
-        var currentNode = self.root
-        // Check if word already exists otherwise creates the node path
-        for character in word.lowercased() {
-            if let child = currentNode.children[character] {
-                currentNode = child
-            } else {
-                currentNode = currentNode.add(value: character)
+        self.lock.withLock {
+            var currentNode = self.root
+            // Check if word already exists otherwise creates the node path
+            for character in word.lowercased() {
+                if let child = currentNode.children[character] {
+                    currentNode = child
+                } else {
+                    currentNode = currentNode.add(value: character)
+                }
             }
-        }
 
-        currentNode.add(document: document)
+            currentNode.add(document: document)
+        }
     }
 
     /// Removes word occurrences found in the given document.
@@ -57,7 +63,9 @@ struct Trie<Document: Hashable> {
             }
         }
 
-        removeInSubTrie(root: self.root, document: document)
+        self.lock.withLock {
+            removeInSubTrie(root: self.root, document: document)
+        }
     }
 
     /// Removes word occurrences found in matching document(s).
@@ -81,7 +89,9 @@ struct Trie<Document: Hashable> {
             }
         }
 
-        removeInSubTrie(root: self.root, where: predicate)
+        self.lock.withLock {
+            removeInSubTrie(root: self.root, where: predicate)
+        }
     }
 
     /// Checks if the trie contains the exact word or words with matching prefix.
@@ -149,15 +159,17 @@ struct Trie<Document: Hashable> {
     private func findLastNodeOf(word: String) -> Node? {
         guard !word.isEmpty else { return nil }
 
-        var currentNode = self.root
-        // Traverse down the trie as far as we can
-        for character in word.lowercased() {
-            guard let child = currentNode.children[character] else {
-                return nil
+        return self.lock.withLock {
+            var currentNode = self.root
+            // Traverse down the trie as far as we can
+            for character in word.lowercased() {
+                guard let child = currentNode.children[character] else {
+                    return nil
+                }
+                currentNode = child
             }
-            currentNode = child
+            return currentNode
         }
-        return currentNode
     }
 }
 
@@ -170,11 +182,11 @@ private final class TrieNode<T: Hashable, Document: Hashable> {
 
     /// The children of this node identified by their corresponding value.
     private var _children = [T: TrieNode<T, Document>]()
-    private let childrenLock = Lock()
+    private let childrenLock = NSLock()
 
     /// If the path to this node forms a valid word, these are the documents where the word can be found.
     private var _documents = Set<Document>()
-    private let documentsLock = Lock()
+    private let documentsLock = NSLock()
 
     var isLeaf: Bool {
         self.childrenLock.withLock {

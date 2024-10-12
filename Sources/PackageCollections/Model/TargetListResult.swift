@@ -1,17 +1,21 @@
-/*
- This source file is part of the Swift.org open source project
-
- Copyright (c) 2020 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
- */
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2020 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
 import Foundation
 
+import PackageModel
 import SourceControl
-import TSCUtility
+
+import struct TSCUtility.Version
 
 extension PackageCollectionsModel {
     public typealias TargetListResult = [TargetListItem]
@@ -32,8 +36,11 @@ extension PackageCollectionsModel.TargetListResult {
     public struct Package: Hashable, Encodable {
         public typealias Version = PackageCollectionsModel.TargetListResult.PackageVersion
 
-        /// Package's repository address
-        public let repository: RepositorySpecifier
+        /// Package's identity
+        public let identity: PackageIdentity
+
+        /// Package's location
+        public let location: String
 
         /// Package description
         public let summary: String?
@@ -52,11 +59,14 @@ extension PackageCollectionsModel.TargetListResult {
         /// The version
         public let version: TSCUtility.Version
 
+        /// Tools version
+        public let toolsVersion: ToolsVersion
+
         /// Package name
         public let packageName: String
 
         public static func < (lhs: PackageVersion, rhs: PackageVersion) -> Bool {
-            lhs.version < rhs.version
+            lhs.version < rhs.version && lhs.toolsVersion < rhs.toolsVersion
         }
     }
 }

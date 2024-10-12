@@ -1,17 +1,31 @@
-# This source file is part of the Swift.org open source project
+# This source file is part of the Swift open source project
 #
-# Copyright (c) 2014 - 2019 Apple Inc. and the Swift project authors
+# Copyright (c) 2014 - 2022 Apple Inc. and the Swift project authors
 # Licensed under Apache License v2.0 with Runtime Library Exception
 #
 # See http://swift.org/LICENSE.txt for license information
 # See http://swift.org/CONTRIBUTORS.txt for Swift project authors
 
 add_library(SPMBuildCore
-  BuildParameters.swift
-  BuildSystem.swift
+  BinaryTarget+Extensions.swift
+  BuildParameters/BuildParameters.swift
+  BuildParameters/BuildParameters+Debugging.swift
+  BuildParameters/BuildParameters+Driver.swift
+  BuildParameters/BuildParameters+Linking.swift
+  BuildParameters/BuildParameters+Output.swift
+  BuildParameters/BuildParameters+Testing.swift
+  BuildSystem/BuildSystem.swift
+  BuildSystem/BuildSystemCommand.swift
+  BuildSystem/BuildSystemDelegate.swift
   BuiltTestProduct.swift
-  Sanitizers.swift
-  Toolchain.swift)
+  Plugins/PluginContextSerializer.swift
+  Plugins/PluginInvocation.swift
+  Plugins/PluginMessages.swift
+  Plugins/PluginScriptRunner.swift
+  CommandPluginResult.swift
+  ResolvedPackage+Extensions.swift
+  Triple+Extensions.swift
+  XCFrameworkMetadata.swift)
 # NOTE(compnerd) workaround for CMake not setting up include flags yet
 set_target_properties(SPMBuildCore PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES ${CMAKE_Swift_MODULE_DIRECTORY})
@@ -22,10 +36,8 @@ target_link_libraries(SPMBuildCore PUBLIC
   PackageGraph)
 
 
-if(USE_CMAKE_INSTALL)
 install(TARGETS SPMBuildCore
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin)
-endif()
 set_property(GLOBAL APPEND PROPERTY SwiftPM_EXPORTS SPMBuildCore)

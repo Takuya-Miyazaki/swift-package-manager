@@ -1,73 +1,76 @@
-/*
- This source file is part of the Swift.org open source project
-
- Copyright (c) 2014 - 2020 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
-*/
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2014-2020 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
 /// A namespace for target-specific build settings.
 public enum TargetBuildSettingDescription {
-
     /// The tool for which a build setting is declared.
-    public enum Tool: String, Codable, Equatable, CaseIterable {
+    public enum Tool: String, Codable, Hashable, CaseIterable, Sendable {
         case c
         case cxx
         case swift
         case linker
     }
 
-    /// The name of the build setting.
-    public enum SettingName: String, Codable, Equatable {
-        case headerSearchPath
-        case define
-        case linkedLibrary
-        case linkedFramework
+    public enum InteroperabilityMode: String, Codable, Hashable, Sendable {
+        case C
+        case Cxx
+    }
 
-        case unsafeFlags
+    /// The kind of the build setting, with associate configuration
+    public enum Kind: Codable, Hashable, Sendable {
+        case headerSearchPath(String)
+        case define(String)
+        case linkedLibrary(String)
+        case linkedFramework(String)
+
+        case interoperabilityMode(InteroperabilityMode)
+
+        case enableUpcomingFeature(String)
+        case enableExperimentalFeature(String)
+
+        case unsafeFlags([String])
+
+        case swiftLanguageMode(SwiftLanguageVersion)
+
+        public var isUnsafeFlags: Bool {
+            switch self {
+            case .unsafeFlags(let flags):
+                // If `.unsafeFlags` is used, but doesn't specify any flags, we treat it the same way as not specifying it.
+                return !flags.isEmpty
+            case .headerSearchPath, .define, .linkedLibrary, .linkedFramework, .interoperabilityMode,
+                 .enableUpcomingFeature, .enableExperimentalFeature, .swiftLanguageMode:
+                return false
+            }
+        }
     }
 
     /// An individual build setting.
-    public struct Setting: Codable, Equatable {
-
+    public struct Setting: Codable, Hashable, Sendable {
         /// The tool associated with this setting.
         public let tool: Tool
 
-        /// The name of the setting.
-        public let name: SettingName
+        /// The kind of the setting.
+        public let kind: Kind
 
         /// The condition at which the setting should be applied.
         public let condition: PackageConditionDescription?
 
-        /// The value of the setting.
-        ///
-        /// This is kind of like an "untyped" value since the length
-        /// of the array will depend on the setting type.
-        public let value: [String]
-
         public init(
             tool: Tool,
-            name: SettingName,
-            value: [String],
-            condition: PackageConditionDescription? = nil
+            kind: Kind,
+            condition: PackageConditionDescription? = .none
         ) {
-            switch name {
-            case .headerSearchPath: fallthrough
-            case .define: fallthrough
-            case .linkedLibrary: fallthrough
-            case .linkedFramework:
-                assert(value.count == 1, "\(tool) \(name) \(value)")
-                break
-            case .unsafeFlags:
-                assert(value.count >= 1, "\(tool) \(name) \(value)")
-                break
-            }
-
             self.tool = tool
-            self.name = name
-            self.value = value
+            self.kind = kind
             self.condition = condition
         }
     }

@@ -1,20 +1,22 @@
-/*
- This source file is part of the Swift.org open source project
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2014-2022 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
- Copyright (c) 2014 - 2020 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
-*/
-
-import TSCBasic
-
+import Basics
 import Foundation
-import TSCUtility
+
+import struct TSCUtility.Version
 
 /// Tools version represents version of the Swift toolchain.
-public struct ToolsVersion: Equatable, Hashable, Codable {
+public struct ToolsVersion: Equatable, Hashable, Codable, Sendable {
 
     public static let v3 = ToolsVersion(version: "3.1.0")
     public static let v4 = ToolsVersion(version: "4.0.0")
@@ -23,13 +25,20 @@ public struct ToolsVersion: Equatable, Hashable, Codable {
     public static let v5_2 = ToolsVersion(version: "5.2.0")
     public static let v5_3 = ToolsVersion(version: "5.3.0")
     public static let v5_4 = ToolsVersion(version: "5.4.0")
+    public static let v5_5 = ToolsVersion(version: "5.5.0")
+    public static let v5_6 = ToolsVersion(version: "5.6.0")
+    public static let v5_7 = ToolsVersion(version: "5.7.0")
+    public static let v5_8 = ToolsVersion(version: "5.8.0")
+    public static let v5_9 = ToolsVersion(version: "5.9.0")
+    public static let v5_10 = ToolsVersion(version: "5.10.0")
+    public static let v6_0 = ToolsVersion(version: "6.0.0")
     public static let vNext = ToolsVersion(version: "999.0.0")
 
     /// The current tools version in use.
-    public static let currentToolsVersion = ToolsVersion(string:
-        "\(Versioning.currentVersion.major)." +
-        "\(Versioning.currentVersion.minor)." +
-        "\(Versioning.currentVersion.patch)")!
+    public static let current = ToolsVersion(string:
+        "\(SwiftVersion.current.major)." +
+        "\(SwiftVersion.current.minor)." +
+        "\(SwiftVersion.current.patch)")!
 
     /// The minimum tools version that is required by the package manager.
     public static let minimumRequired: ToolsVersion = .v4
@@ -98,33 +107,56 @@ public struct ToolsVersion: Equatable, Hashable, Codable {
         _version = version
     }
 
-    /// Returns true if the tools version is valid and can be used by this
-    /// version of the package manager.
-    public func validateToolsVersion(
-        _ currentToolsVersion: ToolsVersion,
-        version: String? = nil,
-        packagePath: String
-    ) throws {
+    private enum ValidationResult {
+        case valid
+        case unsupportedToolsVersion
+        case requireNewerTools
+    }
+
+    private func _validateToolsVersion(_ currentToolsVersion: ToolsVersion) -> ValidationResult {
         // We don't want to throw any error when using the special vNext version.
-        if Versioning.currentVersion.isDevelopment && self == .vNext {
-            return
+        if SwiftVersion.current.isDevelopment && self == .vNext {
+            return .valid
         }
 
         // Make sure the package has the right minimum tools version.
         guard self >= .minimumRequired else {
-            throw UnsupportedToolsVersion(
-                packagePath: packagePath,
-                version: version,
-                currentToolsVersion: currentToolsVersion,
-                packageToolsVersion: self
-            )
+            return .unsupportedToolsVersion
         }
 
         // Make sure the package isn't newer than the current tools version.
         guard currentToolsVersion >= self else {
+            return .requireNewerTools
+        }
+
+        return .valid
+    }
+
+    /// Returns true if the tools version is valid and can be used by this
+    /// version of the package manager.
+    public func validateToolsVersion(_ currentToolsVersion: ToolsVersion) -> Bool {
+        return self._validateToolsVersion(currentToolsVersion) == .valid
+    }
+
+    public func validateToolsVersion(
+        _ currentToolsVersion: ToolsVersion,
+        packageIdentity: PackageIdentity,
+        packageVersion: String? = .none
+    ) throws {
+        switch self._validateToolsVersion(currentToolsVersion) {
+        case .valid:
+            break
+        case .unsupportedToolsVersion:
+            throw UnsupportedToolsVersion(
+                packageIdentity: packageIdentity,
+                packageVersion: packageVersion,
+                currentToolsVersion: currentToolsVersion,
+                packageToolsVersion: self
+            )
+        case .requireNewerTools:
             throw RequireNewerTools(
-                packagePath: packagePath,
-                version: version,
+                packageIdentity: packageIdentity,
+                packageVersion: packageVersion,
                 installedToolsVersion: currentToolsVersion,
                 packageToolsVersion: self
             )
@@ -134,9 +166,9 @@ public struct ToolsVersion: Equatable, Hashable, Codable {
     /// The subpath to the PackageDescription runtime library.
     public var runtimeSubpath: RelativePath {
         if self < .v4_2 {
-            return RelativePath("4")
+            return try! RelativePath(validating: "4") // try! safe
         }
-        return RelativePath("4_2")
+        return try! RelativePath(validating: "4_2") // try! safe
     }
 
     /// The swift language version based on this tools version.
@@ -150,17 +182,31 @@ public struct ToolsVersion: Equatable, Hashable, Codable {
 
             // Otherwise, use 4.2
             return .v4_2
-
-        default:
-            // Anything above 4 major version uses version 5.
+        case 5:
             return .v5
+        default:
+            // Anything above 5 major version uses version 6.
+            return .v6
         }
+    }
+}
+
+extension ToolsVersion {
+    /// The list of version specific identifiers to search when attempting to
+    /// load version specific package or version information, in order of
+    /// preference.
+    public var versionSpecificKeys: [String] {
+        return [
+            "@swift-\(self.major).\(self.minor).\(self.patch)",
+            "@swift-\(self.major).\(self.minor)",
+            "@swift-\(self.major)",
+        ]
     }
 }
 
 extension ToolsVersion: CustomStringConvertible {
     public var description: String {
-        return _version.description
+        return self._version.description
     }
 }
 

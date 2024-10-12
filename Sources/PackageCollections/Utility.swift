@@ -1,21 +1,27 @@
-/*
- This source file is part of the Swift.org open source project
-
- Copyright (c) 2020 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
- */
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2020 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
 import PackageModel
 import SourceControl
 
-struct MultipleErrors: Error {
+struct MultipleErrors: Error, CustomStringConvertible {
     let errors: [Error]
-
+    
     init(_ errors: [Error]) {
         self.errors = errors
+    }
+
+    var description: String {
+        "\(self.errors)"
     }
 }
 
@@ -44,18 +50,5 @@ internal extension Result {
         case .success(let value):
             return value
         }
-    }
-}
-
-// Model Extension
-
-extension PackageReference {
-    /// Initializes a `PackageReference` from `RepositorySpecifier`
-    init(repository: RepositorySpecifier, kind: PackageReference.Kind = .remote) {
-        self.init(
-            identity: PackageIdentity(url: repository.url),
-            kind: kind,
-            location: repository.url
-        )
     }
 }

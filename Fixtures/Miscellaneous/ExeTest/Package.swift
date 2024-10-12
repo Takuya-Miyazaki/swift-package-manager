@@ -1,10 +1,10 @@
-// swift-tools-version:5.3
+// swift-tools-version: 5.5
 import PackageDescription
 
 let package = Package(
     name: "ExeTest",
     targets: [
-        .target(
+        .executableTarget(
             name: "Exe",
             dependencies: []
         ),

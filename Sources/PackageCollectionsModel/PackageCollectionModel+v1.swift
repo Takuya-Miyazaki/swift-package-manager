@@ -1,15 +1,16 @@
-/*
- This source file is part of the Swift.org open source project
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2020-2023 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
- Copyright (c) 2020-2021 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
- */
-
-import struct Foundation.Date
-import struct Foundation.URL
+import Foundation
 
 extension PackageCollectionModel {
     public enum V1 {}
@@ -35,7 +36,7 @@ extension PackageCollectionModel.V1 {
         /// The revision number of this package collection.
         public let revision: Int?
 
-        /// The ISO 8601-formatted datetime string when the package collection was generated.
+        /// When the package collection was generated.
         public let generatedAt: Date
 
         /// The author of this package collection.
@@ -79,7 +80,10 @@ extension PackageCollectionModel.V1 {
 extension PackageCollectionModel.V1.Collection {
     public struct Package: Equatable, Codable {
         /// The URL of the package. Currently only Git repository URLs are supported.
-        public let url: Foundation.URL
+        public let url: URL
+        
+        /// Package identity for registry (https://github.com/swiftlang/swift-package-manager/blob/main/Documentation/PackageRegistry/Registry.md#36-package-identification).
+        public let identity: String?
 
         /// A description of the package.
         public let summary: String?
@@ -91,7 +95,7 @@ extension PackageCollectionModel.V1.Collection {
         public let versions: [PackageCollectionModel.V1.Collection.Package.Version]
 
         /// The URL of the package's README.
-        public let readmeURL: Foundation.URL?
+        public let readmeURL: URL?
 
         /// The package's current license info
         public let license: PackageCollectionModel.V1.License?
@@ -99,6 +103,7 @@ extension PackageCollectionModel.V1.Collection {
         /// Creates a `Package`
         public init(
             url: URL,
+            identity: String? = nil,
             summary: String?,
             keywords: [String]?,
             versions: [PackageCollectionModel.V1.Collection.Package.Version],
@@ -106,6 +111,7 @@ extension PackageCollectionModel.V1.Collection {
             license: PackageCollectionModel.V1.License?
         ) {
             self.url = url
+            self.identity = identity
             self.summary = summary
             self.keywords = keywords
             self.versions = versions
@@ -120,20 +126,14 @@ extension PackageCollectionModel.V1.Collection.Package {
         /// The semantic version string.
         public let version: String
 
-        /// The name of the package.
-        public let packageName: String
+        /// A description of the package version.
+        public let summary: String?
 
-        /// An array of the package version's targets.
-        public let targets: [PackageCollectionModel.V1.Target]
+        /// Manifests by tools version.
+        public let manifests: [String: Manifest]
 
-        /// An array of the package version's products.
-        public let products: [PackageCollectionModel.V1.Product]
-
-        /// The tools (semantic) version specified in `Package.swift`.
-        public let toolsVersion: String
-
-        /// An array of the package version’s supported platforms specified in `Package.swift`.
-        public let minimumPlatformVersions: [PackageCollectionModel.V1.PlatformVersion]?
+        /// Tools version of the default manifest.
+        public let defaultToolsVersion: String
 
         /// An array of compatible platforms and Swift versions that has been tested and verified for.
         public let verifiedCompatibility: [PackageCollectionModel.V1.Compatibility]?
@@ -141,25 +141,78 @@ extension PackageCollectionModel.V1.Collection.Package {
         /// The package version's license.
         public let license: PackageCollectionModel.V1.License?
 
+        /// The author of the package version.
+        public let author: Author?
+
+        /// The signer of the package version.
+        public let signer: PackageCollectionModel.V1.Signer?
+
+        /// When the package version was created.
+        public let createdAt: Date?
+
         /// Creates a `Version`
         public init(
             version: String,
-            packageName: String,
-            targets: [PackageCollectionModel.V1.Target],
-            products: [PackageCollectionModel.V1.Product],
-            toolsVersion: String,
-            minimumPlatformVersions: [PackageCollectionModel.V1.PlatformVersion]?,
+            summary: String?,
+            manifests: [String: Manifest],
+            defaultToolsVersion: String,
             verifiedCompatibility: [PackageCollectionModel.V1.Compatibility]?,
-            license: PackageCollectionModel.V1.License?
+            license: PackageCollectionModel.V1.License?,
+            author: Author?,
+            signer: PackageCollectionModel.V1.Signer?,
+            createdAt: Date?
         ) {
             self.version = version
-            self.packageName = packageName
-            self.targets = targets
-            self.products = products
-            self.toolsVersion = toolsVersion
-            self.minimumPlatformVersions = minimumPlatformVersions
+            self.summary = summary
+            self.manifests = manifests
+            self.defaultToolsVersion = defaultToolsVersion
             self.verifiedCompatibility = verifiedCompatibility
             self.license = license
+            self.author = author
+            self.signer = signer
+            self.createdAt = createdAt
+        }
+
+        public struct Manifest: Equatable, Codable {
+            /// The tools (semantic) version specified in `Package.swift`.
+            public let toolsVersion: String
+
+            /// The name of the package.
+            public let packageName: String
+
+            /// An array of the package version's targets.
+            public let targets: [PackageCollectionModel.V1.Target]
+
+            /// An array of the package version's products.
+            public let products: [PackageCollectionModel.V1.Product]
+
+            /// An array of the package version’s supported platforms specified in `Package.swift`.
+            public let minimumPlatformVersions: [PackageCollectionModel.V1.PlatformVersion]?
+
+            /// Creates a `Manifest`
+            public init(
+                toolsVersion: String,
+                packageName: String,
+                targets: [PackageCollectionModel.V1.Target],
+                products: [PackageCollectionModel.V1.Product],
+                minimumPlatformVersions: [PackageCollectionModel.V1.PlatformVersion]?
+            ) {
+                self.toolsVersion = toolsVersion
+                self.packageName = packageName
+                self.targets = targets
+                self.products = products
+                self.minimumPlatformVersions = minimumPlatformVersions
+            }
+        }
+
+        public struct Author: Equatable, Codable {
+            /// The author name.
+            public let name: String
+
+            /// Creates an `Author`
+            public init(name: String) {
+                self.name = name
+            }
         }
     }
 }
@@ -253,6 +306,32 @@ extension PackageCollectionModel.V1 {
             self.url = url
         }
     }
+
+    public struct Signer: Equatable, Codable {
+        /// The signer type. (e.g., ADP)
+        public let type: String
+
+        /// The common name of the signing certificate's subject.
+        public let commonName: String
+
+        /// The organizational unit name of the signing certificate's subject.
+        public let organizationalUnitName: String
+
+        /// The organization name of the signing certificate's subject.
+        public let organizationName: String
+
+        public init(
+            type: String,
+            commonName: String,
+            organizationalUnitName: String,
+            organizationName: String
+        ) {
+            self.type = type
+            self.commonName = commonName
+            self.organizationalUnitName = organizationalUnitName
+            self.organizationName = organizationName
+        }
+    }
 }
 
 extension PackageCollectionModel.V1.Platform: Hashable {
@@ -299,14 +378,23 @@ extension PackageCollectionModel.V1 {
         /// An executable product.
         case executable
 
+        /// An plugin product.
+        case plugin
+        
+        /// An executable code snippet.
+        case snippet
+
         /// A test product.
         case test
+        
+        /// A macro product.
+        case `macro`
     }
 }
 
 extension PackageCollectionModel.V1.ProductType: Codable {
     private enum CodingKeys: String, CodingKey {
-        case library, executable, test
+        case library, executable, plugin, snippet, test, `macro`
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -317,8 +405,14 @@ extension PackageCollectionModel.V1.ProductType: Codable {
             try unkeyedContainer.encode(a1)
         case .executable:
             try container.encodeNil(forKey: .executable)
+        case .plugin:
+            try container.encodeNil(forKey: .plugin)
+        case .snippet:
+            try container.encodeNil(forKey: .snippet)
         case .test:
             try container.encodeNil(forKey: .test)
+        case .macro:
+            try container.encodeNil(forKey: .macro)
         }
     }
 
@@ -332,10 +426,125 @@ extension PackageCollectionModel.V1.ProductType: Codable {
             var unkeyedValues = try values.nestedUnkeyedContainer(forKey: key)
             let a1 = try unkeyedValues.decode(PackageCollectionModel.V1.ProductType.LibraryType.self)
             self = .library(a1)
-        case .test:
-            self = .test
         case .executable:
             self = .executable
+        case .plugin:
+            self = .plugin
+        case .snippet:
+            self = .snippet
+        case .test:
+            self = .test
+        case .macro:
+            self = .macro
         }
+    }
+}
+
+// MARK: - Signed package collection
+
+extension PackageCollectionModel.V1 {
+    /// A  signed package collection. The only difference between this and `Collection`
+    /// is the presence of `signature`.
+    public struct SignedCollection: Equatable {
+        /// The package collection
+        public let collection: PackageCollectionModel.V1.Collection
+
+        /// The signature and metadata
+        public let signature: PackageCollectionModel.V1.Signature
+
+        /// Creates a `SignedCollection`
+        public init(collection: PackageCollectionModel.V1.Collection, signature: PackageCollectionModel.V1.Signature) {
+            self.collection = collection
+            self.signature = signature
+        }
+    }
+
+    /// Package collection signature and associated metadata
+    public struct Signature: Equatable, Codable {
+        /// The signature
+        public let signature: String
+
+        /// Details about the certificate used to generate the signature
+        public let certificate: Certificate
+
+        public init(signature: String, certificate: Certificate) {
+            self.signature = signature
+            self.certificate = certificate
+        }
+
+        public struct Certificate: Equatable, Codable {
+            /// Subject of the certificate
+            public let subject: Name
+
+            /// Issuer of the certificate
+            public let issuer: Name
+
+            /// Creates a `Certificate`
+            public init(subject: Name, issuer: Name) {
+                self.subject = subject
+                self.issuer = issuer
+            }
+
+            /// Generic certificate name (e.g., subject, issuer)
+            public struct Name: Equatable, Codable {
+                /// User ID
+                public let userID: String?
+
+                /// Common name
+                public let commonName: String?
+
+                /// Organizational unit
+                public let organizationalUnit: String?
+
+                /// Organization
+                public let organization: String?
+
+                /// Creates a `Name`
+                public init(userID: String?,
+                            commonName: String?,
+                            organizationalUnit: String?,
+                            organization: String?) {
+                    self.userID = userID
+                    self.commonName = commonName
+                    self.organizationalUnit = organizationalUnit
+                    self.organization = organization
+                }
+            }
+        }
+    }
+}
+
+extension PackageCollectionModel.V1.SignedCollection: Codable {
+    enum CodingKeys: String, CodingKey {
+        // Collection properties
+        case name
+        case overview
+        case keywords
+        case packages
+        case formatVersion
+        case revision
+        case generatedAt
+        case generatedBy
+
+        case signature
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(self.collection.name, forKey: .name)
+        try container.encodeIfPresent(self.collection.overview, forKey: .overview)
+        try container.encodeIfPresent(self.collection.keywords, forKey: .keywords)
+        try container.encode(self.collection.packages, forKey: .packages)
+        try container.encode(self.collection.formatVersion, forKey: .formatVersion)
+        try container.encodeIfPresent(self.collection.revision, forKey: .revision)
+        try container.encode(self.collection.generatedAt, forKey: .generatedAt)
+        try container.encodeIfPresent(self.collection.generatedBy, forKey: .generatedBy)
+        try container.encode(self.signature, forKey: .signature)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.collection = try PackageCollectionModel.V1.Collection(from: decoder)
+        self.signature = try container.decode(PackageCollectionModel.V1.Signature.self, forKey: .signature)
     }
 }

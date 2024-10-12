@@ -1,20 +1,23 @@
-/*
- This source file is part of the Swift.org open source project
-
- Copyright (c) 2014 - 2020 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
-*/
-
-import TSCBasic
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2014-2020 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
 import Foundation
-import TSCUtility
+
+import struct TSCBasic.RegEx
+
+import struct TSCUtility.Version
 
 /// Represents a Swift language version.
-public struct SwiftLanguageVersion {
+public struct SwiftLanguageVersion: Hashable, Sendable {
 
     /// Swift language version 3.
     public static let v3 = SwiftLanguageVersion(uncheckedString: "3")
@@ -28,9 +31,12 @@ public struct SwiftLanguageVersion {
     /// Swift language version 5.
     public static let v5 = SwiftLanguageVersion(uncheckedString: "5")
 
+    /// Swift language version 6.
+    public static let v6 = SwiftLanguageVersion(uncheckedString: "6")
+
     /// The list of known Swift language versions.
     public static let knownSwiftLanguageVersions = [
-        v3, v4, v4_2, v5,
+        v3, v4, v4_2, v5, v6
     ]
 
     /// The raw value of the language version.

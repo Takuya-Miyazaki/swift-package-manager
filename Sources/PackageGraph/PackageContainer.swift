@@ -1,17 +1,20 @@
-/*
- This source file is part of the Swift.org open source project
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2014-2020 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
- Copyright (c) 2014 - 2020 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
- */
-
+import Basics
+import _Concurrency
 import Dispatch
-import PackageLoading
 import PackageModel
-import SourceControl
+
 import struct TSCUtility.Version
 
 /// A container of packages.
@@ -38,32 +41,28 @@ public protocol PackageContainer {
     /// The identifier for the package.
     var package: PackageReference { get }
 
+    var shouldInvalidatePinnedVersions: Bool { get }
+
     /// Returns true if the tools version is compatible at the given version.
-    func isToolsVersionCompatible(at version: Version) -> Bool
+    func isToolsVersionCompatible(at version: Version) async -> Bool
 
     /// Returns the tools version for the given version
-    func toolsVersion(for version: Version) throws -> ToolsVersion
-    
+    func toolsVersion(for version: Version) async throws -> ToolsVersion
+
     /// Get the list of versions which are available for the package.
     ///
     /// The list will be returned in sorted order, with the latest version *first*.
     /// All versions will not be requested at once. Resolver will request the next one only
     /// if the previous one did not satisfy all constraints.
-    func toolsVersionsAppropriateVersionsDescending() throws -> [Version]
+    func toolsVersionsAppropriateVersionsDescending() async throws -> [Version]
 
     /// Get the list of versions in the repository sorted in the ascending order, that is the earliest
     /// version appears first.
-    func versionsAscending() throws -> [Version]
+    func versionsAscending() async throws -> [Version]
 
     /// Get the list of versions in the repository sorted in the descending order, that is the latest
     /// version appears first.
-    func versionsDescending() throws -> [Version]
-
-    /// Get the list of versions in the repository sorted in the reverse order, that is the latest
-    /// version appears first.
-    // FIXME: deprecated 12/2020, remove once clients migrate
-    @available(*, deprecated, message: "use versionsDescending instead")
-    func reversedVersions() throws -> [Version]
+    func versionsDescending() async throws -> [Version]
 
     // FIXME: We should perhaps define some particularly useful error codes
     // here, so the resolver can handle errors more meaningfully.
@@ -76,7 +75,7 @@ public protocol PackageContainer {
     /// - Precondition: `versions.contains(version)`
     /// - Throws: If the version could not be resolved; this will abort
     ///   dependency resolution completely.
-    func getDependencies(at version: Version, productFilter: ProductFilter) throws -> [PackageContainerConstraint]
+    func getDependencies(at version: Version, productFilter: ProductFilter) async throws -> [PackageContainerConstraint]
 
     /// Fetch the declared dependencies for a particular revision.
     ///
@@ -85,32 +84,54 @@ public protocol PackageContainer {
     ///
     /// - Throws: If the revision could not be resolved; this will abort
     ///   dependency resolution completely.
-    func getDependencies(at revision: String, productFilter: ProductFilter) throws -> [PackageContainerConstraint]
+    func getDependencies(at revision: String, productFilter: ProductFilter) async throws -> [PackageContainerConstraint]
 
     /// Fetch the dependencies of an unversioned package container.
     ///
     /// NOTE: This method should not be called on a versioned container.
-    func getUnversionedDependencies(productFilter: ProductFilter) throws -> [PackageContainerConstraint]
+    func getUnversionedDependencies(productFilter: ProductFilter) async throws -> [PackageContainerConstraint]
 
     /// Get the updated identifier at a bound version.
     ///
     /// This can be used by the containers to fill in the missing information that is obtained
     /// after the container is available. The updated identifier is returned in result of the
     /// dependency resolution.
-    func getUpdatedIdentifier(at boundVersion: BoundVersion) throws -> PackageReference
+    func loadPackageReference(at boundVersion: BoundVersion) async throws -> PackageReference
 }
 
 extension PackageContainer {
-    public func reversedVersions() throws -> [Version] {
-        try self.versionsDescending()
+    public func reversedVersions() async throws -> [Version] {
+        try await self.versionsDescending()
     }
 
-    public func versionsDescending() throws -> [Version] {
-        try self.versionsAscending().reversed()
+    public func versionsDescending() async throws -> [Version] {
+        try await self.versionsAscending().reversed()
+    }
+
+    public var shouldInvalidatePinnedVersions: Bool {
+        return true
     }
 }
 
-// MARK: -
+public protocol CustomPackageContainer: PackageContainer {
+    /// Retrieve the package using this package container.
+    func retrieve(
+       at version: Version,
+       progressHandler: ((_ bytesReceived: Int64, _ totalBytes: Int64?) -> Void)?,
+       observabilityScope: ObservabilityScope
+    ) throws -> AbsolutePath
+
+    /// Get the custom file system for this package container.
+    func getFileSystem() throws -> FileSystem?
+}
+
+public extension CustomPackageContainer {
+    func retrieve(at version: Version, observabilityScope: ObservabilityScope) throws -> AbsolutePath {
+        return try self.retrieve(at: version, progressHandler: .none, observabilityScope: observabilityScope)
+    }
+}
+
+// MARK: - PackageContainerConstraint
 
 /// An individual constraint onto a container.
 public struct PackageContainerConstraint: Equatable, Hashable {
@@ -145,15 +166,48 @@ extension PackageContainerConstraint: CustomStringConvertible {
     }
 }
 
-// MARK: -
+// MARK: - PackageContainerProvider
 
 /// An interface for resolving package containers.
 public protocol PackageContainerProvider {
     /// Get the container for a particular identifier asynchronously.
+
+    @available(*, noasync, message: "Use the async alternative")
     func getContainer(
         for package: PackageReference,
-        skipUpdate: Bool,
+        updateStrategy: ContainerUpdateStrategy,
+        observabilityScope: ObservabilityScope,
         on queue: DispatchQueue,
-        completion: @escaping (Result<PackageContainer, Swift.Error>) -> Void
+        completion: @escaping (Result<PackageContainer, Error>) -> Void
     )
+}
+
+public extension PackageContainerProvider {
+    func getContainer(
+        for package: PackageReference,
+        updateStrategy: ContainerUpdateStrategy,
+        observabilityScope: ObservabilityScope,
+        on queue: DispatchQueue
+    ) async throws -> PackageContainer {
+        try await withCheckedThrowingContinuation { continuation in
+            self.getContainer(
+                for: package,
+                updateStrategy: updateStrategy,
+                observabilityScope: observabilityScope,
+                on: queue,
+                completion: {
+                    continuation.resume(with: $0)
+                }
+            )
+        }
+    }
+}
+
+/// Only used for source control containers and as such a mirror of RepositoryUpdateStrategy
+/// This duplication is unfortunate - ideally this is not a concern of the ContainerProvider at all
+/// but it is required give how PackageContainerProvider currently integrated into the resolver
+public enum ContainerUpdateStrategy {
+    case never
+    case always
+    case ifNeeded(revision: String)
 }

@@ -1,51 +1,53 @@
-/*
- This source file is part of the Swift.org open source project
-
- Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
-*/
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2014-2017 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
 import PackageModel
-import SourceControl
 
-extension PackageDependencyDescription {
+extension PackageDependency {
     /// Create the package reference object for the dependency.
-    public func createPackageRef(mirrors: DependencyMirrors) -> PackageReference {
-        let effectiveURL = mirrors.effectiveURL(forURL: url)
-
-        // FIXME: The identity of a package dependency is currently based on
-        //        on a name computed from the package's effective URL.  This
-        //        is because the name of the package that's in the manifest
-        //        is not known until the manifest has been parsed.
-        //        We should instead use the declared URL of a package dependency
-        //        as its identity, as it will be needed for supporting package
-        //        registries.
-        let identity = PackageIdentity(url: effectiveURL)
-        
-        return PackageReference(
-            identity: identity,
-            kind: requirement == .localPackage ? .local : .remote,
-            location: effectiveURL
-        )
+    public var packageRef: PackageReference {
+        let packageKind: PackageReference.Kind
+        switch self {
+        case .fileSystem(let settings):
+            packageKind = .fileSystem(settings.path)
+        case .sourceControl(let settings):
+            switch settings.location {
+            case .local(let path):
+                packageKind = .localSourceControl(path)
+            case .remote(let url):
+                packageKind = .remoteSourceControl(url)
+            }
+        case .registry(let settings):
+            packageKind = .registry(settings.identity)
+        }
+        return PackageReference(identity: self.identity, kind: packageKind)
     }
 }
 
 extension Manifest {
     /// Constructs constraints of the dependencies in the raw package.
-    public func dependencyConstraints(productFilter: ProductFilter, mirrors: DependencyMirrors) -> [PackageContainerConstraint] {
-        return dependenciesRequired(for: productFilter).map({
+    public func dependencyConstraints(productFilter: ProductFilter) throws -> [PackageContainerConstraint] {
+        return try self.dependenciesRequired(for: productFilter).map({
             return PackageContainerConstraint(
-                package: $0.createPackageRef(mirrors: mirrors),
-                requirement: $0.requirement.toConstraintRequirement(),
+                package: $0.packageRef,
+                requirement: try $0.toConstraintRequirement(),
                 products: $0.productFilter)
         })
     }
 }
 
 extension PackageContainerConstraint {
+    /// Constructs a structure of dependency nodes in a package.
+    /// - returns: An array of ``DependencyResolutionNode``
     internal func nodes() -> [DependencyResolutionNode] {
         switch products {
         case .everything:
@@ -63,15 +65,5 @@ extension PackageContainerConstraint {
                 }
             }
         }
-    }
-}
-
-extension PackageReference {
-    /// The repository of the package.
-    ///
-    /// This should only be accessed when the reference is not local.
-    public var repository: RepositorySpecifier {
-        precondition(kind == .remote)
-        return RepositorySpecifier(url: self.location)
     }
 }

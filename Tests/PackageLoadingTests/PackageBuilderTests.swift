@@ -1,32 +1,31 @@
-/*
- This source file is part of the Swift.org open source project
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2014-2024 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
- Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
-*/
-
-import XCTest
-import SPMTestSupport
-
-import TSCBasic
-import PackageModel
-import TSCUtility
-
+import Basics
 import PackageLoading
+import PackageModel
+import _InternalTestSupport
+import XCTest
 
 /// Tests for the handling of source layout conventions.
-class PackageBuilderTests: XCTestCase {
-
+final class PackageBuilderTests: XCTestCase {
     func testDotFilesAreIgnored() throws {
         let fs = InMemoryFileSystem(emptyFiles:
             "/Sources/foo/.Bar.swift",
             "/Sources/foo/Foo.swift")
 
-        let manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
+            path: .root,
             targets: [
                 try TargetDescription(name: "foo"),
             ]
@@ -39,19 +38,44 @@ class PackageBuilderTests: XCTestCase {
         }
     }
 
-    func testMixedSources() throws {
+    func testXCPrivacyIgnored() throws {
         let fs = InMemoryFileSystem(emptyFiles:
-            "/Sources/foo/main.swift",
-            "/Sources/foo/main.c")
+            "/Sources/foo/PrivacyInfo.xcprivacy",
+            "/Sources/foo/Foo.swift")
 
-        let manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
+            path: .root,
+            targets: [
+                try TargetDescription(name: "foo"),
+            ]
+        )
+        PackageBuilderTester(manifest, in: fs) { package, _ in
+            package.checkModule("foo") { module in
+                module.check(c99name: "foo", type: .library)
+                module.checkSources(root: "/Sources/foo", paths: "Foo.swift")
+                module.checkResources(resources: [])
+            }
+        }
+    }
+
+    func testMixedSources() throws {
+        let foo: AbsolutePath = "/Sources/foo"
+
+        let fs = InMemoryFileSystem(emptyFiles:
+            foo.appending(components: "main.swift").pathString,
+            foo.appending(components: "main.c").pathString
+        )
+
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
+            path: .root,
             targets: [
                 try TargetDescription(name: "foo"),
             ]
         )
         PackageBuilderTester(manifest, in: fs) { _, diagnostics in
-            diagnostics.check(diagnostic: "target at '/Sources/foo' contains mixed language source files; feature not supported", behavior: .error)
+            diagnostics.check(diagnostic: "target at '\(foo)' contains mixed language source files; feature not supported", severity: .error)
         }
     }
 
@@ -70,8 +94,9 @@ class PackageBuilderTests: XCTestCase {
             try fs.createSymbolicLink(linkPath, pointingAt: linkDestPath, relative: false)
             try fs.removeFileTree(linkDestPath)
 
-            let manifest = Manifest.createV4Manifest(
-                name: "pkg",
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                path: path,
                 targets: [
                     try TargetDescription(name: "foo"),
                 ]
@@ -80,8 +105,8 @@ class PackageBuilderTests: XCTestCase {
             PackageBuilderTester(manifest, path: path, in: fs) { package, diagnostics in
                 diagnostics.check(
                     diagnostic: "ignoring broken symlink \(linkPath)",
-                    behavior: .warning,
-                    location: "'pkg' \(path)")
+                    severity: .warning
+                )
                 package.checkModule("foo")
             }
         }
@@ -100,8 +125,8 @@ class PackageBuilderTests: XCTestCase {
             // Create a symlink to foo.
             try fs.createSymbolicLink(bar, pointingAt: foo, relative: false)
 
-            let manifest = Manifest.createV4Manifest(
-                name: "pkg",
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
                 targets: [
                     try TargetDescription(name: "bar"),
                 ]
@@ -118,8 +143,8 @@ class PackageBuilderTests: XCTestCase {
             "/Sources/MyPackage/main.swift",
             "/Tests/MyPackageTests/abc.c")
 
-        let manifest = Manifest.createV4Manifest(
-            name: "MyPackage",
+        let manifest = Manifest.createRootManifest(
+            displayName: "MyPackage",
             targets: [
                 try TargetDescription(name: "MyPackage"),
                 try TargetDescription(name: "MyPackageTests", dependencies: ["MyPackage"], type: .test),
@@ -138,11 +163,14 @@ class PackageBuilderTests: XCTestCase {
 
             package.checkProduct("MyPackage") { _ in }
 
-          #if os(Linux)
-            diagnostics.check(diagnostic: "ignoring target 'MyPackageTests' in package 'MyPackage'; C language in tests is not yet supported", behavior: .warning)
-          #elseif os(macOS) || os(Android)
+            #if os(Linux)
+            diagnostics.check(
+                diagnostic: "ignoring target 'MyPackageTests' in package '\(package.packageIdentity)'; C language in tests is not yet supported",
+                severity: .warning
+            )
+            #elseif os(macOS) || os(Android) || os(Windows)
             package.checkProduct("MyPackagePackageTests") { _ in }
-          #endif
+            #endif
         }
     }
 
@@ -157,8 +185,8 @@ class PackageBuilderTests: XCTestCase {
             "/Package.swift",
             "/Packages/MyPackage/main.c")
 
-        let manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
             targets: [
                 try TargetDescription(name: "pkg"),
             ]
@@ -180,8 +208,8 @@ class PackageBuilderTests: XCTestCase {
             "/Sources/Foo/Package@swift-1.swift")
 
         let name = "Foo"
-        let manifest = Manifest.createV4Manifest(
-            name: name,
+        let manifest = Manifest.createRootManifest(
+            displayName: name,
             targets: [
                 try TargetDescription(name: name),
             ]
@@ -201,8 +229,8 @@ class PackageBuilderTests: XCTestCase {
             "/Sources/clib/clib.c"
         )
 
-        let manifest = Manifest.createV4Manifest(
-            name: "MyPackage",
+        let manifest = Manifest.createRootManifest(
+            displayName: "MyPackage",
             targets: [
                 try TargetDescription(name: "clib"),
             ]
@@ -211,24 +239,26 @@ class PackageBuilderTests: XCTestCase {
             package.checkModule("clib") { module in
                 module.check(c99name: "clib", type: .library)
                 module.checkSources(root: "/Sources/clib", paths: "clib.c")
-                module.check(moduleMapType: .custom(AbsolutePath("/Sources/clib/include/module.modulemap")))
+                module.check(moduleMapType: .custom("/Sources/clib/include/module.modulemap"))
             }
         }
     }
 
     func testPublicIncludeDirMixedWithSources() throws {
+        let Sources: AbsolutePath = "/Sources"
+
         let fs = InMemoryFileSystem(emptyFiles:
-            "/Sources/clib/nested/nested.h",
-            "/Sources/clib/nested/nested.c",
-            "/Sources/clib/clib.h",
-            "/Sources/clib/clib.c",
-            "/Sources/clib/clib2.h",
-            "/Sources/clib/clib2.c",
+            Sources.appending(components: "clib", "nested", "nested.h").pathString,
+            Sources.appending(components: "clib", "nested", "nested.c").pathString,
+            Sources.appending(components: "clib", "clib.h").pathString,
+            Sources.appending(components: "clib", "clib.c").pathString,
+            Sources.appending(components: "clib", "clib2.h").pathString,
+            Sources.appending(components: "clib", "clib2.c").pathString,
             "/done"
         )
 
-        let manifest = Manifest.createV4Manifest(
-            name: "MyPackage",
+        let manifest = Manifest.createRootManifest(
+            displayName: "MyPackage",
             targets: [
                 try TargetDescription(
                     name: "clib",
@@ -239,16 +269,21 @@ class PackageBuilderTests: XCTestCase {
             ]
         )
         PackageBuilderTester(manifest, in: fs) { package, diags in
-            diags.check(diagnostic: "found duplicate sources declaration in the package manifest: /Sources/clib", behavior: .warning)
+            diags.check(
+                diagnostic: "found duplicate sources declaration in the package manifest: \(Sources.appending(components: "clib"))",
+                severity: .warning
+            )
             package.checkModule("clib") { module in
                 module.check(c99name: "clib", type: .library)
-                module.checkSources(root: "/Sources", paths: "clib/clib.c", "clib/clib2.c", "clib/nested/nested.c")
-                module.check(moduleMapType: .umbrellaHeader(AbsolutePath("/Sources/clib/clib.h")))
+                module.checkSources(root: Sources.pathString, paths: RelativePath("clib").appending(components: "clib.c").pathString, RelativePath("clib").appending(components: "clib2.c").pathString, RelativePath("clib").appending(components: "nested", "nested.c").pathString)
+                module.check(moduleMapType: .umbrellaHeader(Sources.appending(components: "clib", "clib.h")))
             }
         }
     }
 
     func testDeclaredSourcesWithDot() throws {
+        let swiftLib: RelativePath = RelativePath("swift.lib")
+
         let fs = InMemoryFileSystem(emptyFiles:
             "/Sources/swift.lib/foo.swift",
             "/Sources/swiftlib1/swift.lib/foo.swift",
@@ -258,8 +293,8 @@ class PackageBuilderTests: XCTestCase {
             "/done"
         )
 
-        let manifest = Manifest.createV4Manifest(
-            name: "MyPackage",
+        let manifest = Manifest.createRootManifest(
+            displayName: "MyPackage",
             targets: [
                 try TargetDescription(
                     name: "swift.lib"
@@ -267,7 +302,7 @@ class PackageBuilderTests: XCTestCase {
                 try TargetDescription(
                     name: "swiftlib1",
                     path: "Sources/swiftlib1",
-                    sources: ["swift.lib"]
+                    sources: [swiftLib.pathString]
                 ),
                 try TargetDescription(
                     name: "swiftlib2",
@@ -284,13 +319,13 @@ class PackageBuilderTests: XCTestCase {
                 module.checkSources(sources: ["foo.swift"])
             }
             result.checkModule("swiftlib1") { module in
-                module.checkSources(sources: ["swift.lib/foo.swift"])
+                module.checkSources(sources: [swiftLib.appending(components: "foo.swift").pathString])
             }
             result.checkModule("swiftlib2") { module in
                 module.checkSources(sources: ["foo.swift"])
             }
             result.checkModule("swiftlib3") { module in
-                module.checkSources(sources: ["foo.bar/bar.swift", "foo.swift"])
+                module.checkSources(sources: [RelativePath("foo.bar").appending(components: "bar.swift").pathString, "foo.swift"])
             }
         }
     }
@@ -304,8 +339,8 @@ class PackageBuilderTests: XCTestCase {
             "/done"
         )
 
-        let manifest = Manifest.createV4Manifest(
-            name: "MyPackage",
+        let manifest = Manifest.createRootManifest(
+            displayName: "MyPackage",
             targets: [
                 try TargetDescription(
                     name: "clib",
@@ -316,7 +351,7 @@ class PackageBuilderTests: XCTestCase {
         )
         PackageBuilderTester(manifest, in: fs) { result, _ in
             result.checkModule("clib") { module in
-                module.checkSources(sources: ["clib/bar.c", "clib/subfolder/foo.c"])
+                module.checkSources(sources: [RelativePath("clib").appending(components: "bar.c").pathString, RelativePath("clib").appending(components: "subfolder", "foo.c").pathString])
             }
         }
     }
@@ -329,10 +364,10 @@ class PackageBuilderTests: XCTestCase {
             "/Sources/foo/foo.swift"
         )
 
-        var manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        var manifest = Manifest.createRootManifest(
+            displayName: "pkg",
             products: [
-                ProductDescription(name: "exec", type: .executable, targets: ["exec", "foo"]),
+                try ProductDescription(name: "exec", type: .executable, targets: ["exec", "foo"]),
             ],
             targets: [
                 try TargetDescription(name: "foo"),
@@ -347,8 +382,8 @@ class PackageBuilderTests: XCTestCase {
             }
         }
 
-        manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        manifest = Manifest.createRootManifest(
+            displayName: "pkg",
             products: [],
             targets: [
                 try TargetDescription(name: "foo"),
@@ -365,10 +400,10 @@ class PackageBuilderTests: XCTestCase {
 
         // If we already have an explicit product, we shouldn't create an
         // implicit one.
-        manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        manifest = Manifest.createRootManifest(
+            displayName: "pkg",
             products: [
-                ProductDescription(name: "exec1", type: .executable, targets: ["exec"]),
+                try ProductDescription(name: "exec1", type: .executable, targets: ["exec"]),
             ],
             targets: [
                 try TargetDescription(name: "foo"),
@@ -390,13 +425,13 @@ class PackageBuilderTests: XCTestCase {
             "/Sources/exec2/main.swift",
             "/Sources/lib/lib.swift"
         )
-        
+
         // Check that an explicitly declared target without a main source file works.
-        var manifest = Manifest.createV4Manifest(
-            name: "pkg",
-            toolsVersion: .vNext,
+        var manifest = Manifest.createRootManifest(
+            displayName: "pkg",
+            toolsVersion: .v5_5,
             products: [
-                ProductDescription(name: "exec1", type: .executable, targets: ["exec1", "lib"]),
+                try ProductDescription(name: "exec1", type: .executable, targets: ["exec1", "lib"]),
             ],
             targets: [
                 try TargetDescription(name: "exec1", type: .executable),
@@ -412,9 +447,9 @@ class PackageBuilderTests: XCTestCase {
         }
 
         // Check that products are inferred for explicitly declared executable targets.
-        manifest = Manifest.createV4Manifest(
-            name: "pkg",
-            toolsVersion: .vNext,
+        manifest = Manifest.createRootManifest(
+            displayName: "pkg",
+            toolsVersion: .v5_5,
             products: [],
             targets: [
                 try TargetDescription(name: "exec1", type: .executable),
@@ -430,11 +465,11 @@ class PackageBuilderTests: XCTestCase {
         }
 
         // Check that products are not inferred if there is an explicit executable product.
-        manifest = Manifest.createV4Manifest(
-            name: "pkg",
-            toolsVersion: .vNext,
+        manifest = Manifest.createRootManifest(
+            displayName: "pkg",
+            toolsVersion: .v5_5,
             products: [
-                ProductDescription(name: "exec1", type: .executable, targets: ["exec1"]),
+                try ProductDescription(name: "exec1", type: .executable, targets: ["exec1"]),
             ],
             targets: [
                 try TargetDescription(name: "lib"),
@@ -450,11 +485,11 @@ class PackageBuilderTests: XCTestCase {
         }
 
         // Check that an explicitly declared target with a main source file still works.
-        manifest = Manifest.createV4Manifest(
-            name: "pkg",
-            toolsVersion: .vNext,
+        manifest = Manifest.createRootManifest(
+            displayName: "pkg",
+            toolsVersion: .v5_5,
             products: [
-                ProductDescription(name: "exec1", type: .executable, targets: ["exec1"]),
+                try ProductDescription(name: "exec1", type: .executable, targets: ["exec1"]),
             ],
             targets: [
                 try TargetDescription(name: "lib"),
@@ -470,11 +505,11 @@ class PackageBuilderTests: XCTestCase {
         }
 
         // Check that a inferred target with a main source file still works but yields a warning.
-        manifest = Manifest.createV4Manifest(
-            name: "pkg",
-            toolsVersion: .vNext,
+        manifest = Manifest.createRootManifest(
+            displayName: "pkg",
+            toolsVersion: .v5_5,
             products: [
-                ProductDescription(name: "exec2", type: .executable, targets: ["exec2"]),
+                try ProductDescription(name: "exec2", type: .executable, targets: ["exec2"]),
             ],
             targets: [
                 try TargetDescription(name: "lib"),
@@ -482,7 +517,10 @@ class PackageBuilderTests: XCTestCase {
             ]
         )
         PackageBuilderTester(manifest, in: fs) { package, diagnostics in
-            diagnostics.check(diagnostic: "in tools version 5.4.0 and later, use 'executableTarget()' to declare executable targets", behavior: .warning)
+            diagnostics.check(
+                diagnostic: "'exec2' was identified as an executable target given the presence of a 'main' file. Starting with tools version 5.4.0 executable targets should be declared as 'executableTarget()'",
+                severity: .warning
+            )
             package.checkModule("lib") { _ in }
             package.checkModule("exec2") { _ in }
             package.checkProduct("exec2") { product in
@@ -490,17 +528,17 @@ class PackageBuilderTests: XCTestCase {
             }
         }
     }
-    
-    func testTestManifestFound() throws {
-        try SwiftTarget.testManifestNames.forEach { name in
+
+    func testTestEntryPointFound() throws {
+        try SwiftModule.testEntryPointNames.forEach { name in
             let fs = InMemoryFileSystem(emptyFiles:
                 "/swift/exe/foo.swift",
                 "/\(name)",
                 "/swift/tests/footests.swift"
             )
 
-            let manifest = Manifest.createV4Manifest(
-                name: "pkg",
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
                 targets: [
                     try TargetDescription(name: "exe", path: "swift/exe"),
                     try TargetDescription(name: "tests", path: "swift/tests", type: .test),
@@ -519,7 +557,7 @@ class PackageBuilderTests: XCTestCase {
 
                 package.checkProduct("pkgPackageTests") { product in
                     product.check(type: .test, targets: ["tests"])
-                    product.check(testManifestPath: "/\(name)")
+                    product.check(testEntryPointPath: "/\(name)")
                 }
             }
         }
@@ -531,8 +569,8 @@ class PackageBuilderTests: XCTestCase {
             "/pkg/footests.swift"
         )
 
-        let manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
             targets: [
                 try TargetDescription(
                     name: "exe",
@@ -547,27 +585,47 @@ class PackageBuilderTests: XCTestCase {
                 ),
             ]
         )
-        PackageBuilderTester(manifest, path: AbsolutePath("/pkg"), in: fs) { package, _ in
+        PackageBuilderTester(manifest, path: "/pkg", in: fs) { package, _ in
             package.checkModule("exe") { _ in }
             package.checkModule("tests") { _ in }
 
             package.checkProduct("pkgPackageTests") { product in
                 product.check(type: .test, targets: ["tests"])
-                product.check(testManifestPath: nil)
+                product.check(testEntryPointPath: nil)
             }
         }
     }
 
-    func testMultipleTestManifestError() throws {
-        let name = SwiftTarget.testManifestNames.first!
-        let fs = InMemoryFileSystem(emptyFiles:
-            "/\(name)",
-            "/swift/\(name)",
-            "/swift/tests/footests.swift"
+    func testEmptyProductNameError() throws {
+        let fs = InMemoryFileSystem(emptyFiles: "/Sources/best/best.swift")
+
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
+            products: [
+                try ProductDescription(name: "", type: .library(.automatic), targets: ["best"]),
+            ],
+            targets: [
+                try TargetDescription(name: "best"),
+            ]
         )
 
-        let manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+            diagnostics.check(diagnostic: "product names can not be empty", severity: .error)
+        }
+    }
+
+    func testMultipleTestEntryPointsError() throws {
+        let name = SwiftModule.defaultTestEntryPointName
+        let swift: AbsolutePath = "/swift"
+
+        let fs = InMemoryFileSystem(emptyFiles:
+            AbsolutePath.root.appending(components: name).pathString,
+            swift.appending(components: name).pathString,
+            swift.appending(components: "tests", "footests.swift").pathString
+        )
+
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
             targets: [
                 try TargetDescription(
                     name: "tests",
@@ -576,32 +634,36 @@ class PackageBuilderTests: XCTestCase {
                 ),
             ]
         )
-        PackageBuilderTester(manifest, in: fs) { _, diagnostics in
-            diagnostics.check(diagnostic: "package 'pkg' has multiple test manifest files: /\(name), /swift/\(name)", behavior: .error)
+        PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+            diagnostics.check(diagnostic: "package '\(package.packageIdentity)' has multiple test entry point files: \(try! AbsolutePath(validating: "/\(name)")), \(swift.appending(components: name))", severity: .error)
         }
     }
 
     func testCustomTargetPaths() throws {
+        let Sources: AbsolutePath = "/Sources"
+        let swift: RelativePath = "swift"
+        let bar: AbsolutePath = "/bar"
+
         let fs = InMemoryFileSystem(emptyFiles:
             "/mah/target/exe/swift/exe/main.swift",
             "/mah/target/exe/swift/exe/foo.swift",
             "/mah/target/exe/swift/bar.swift",
             "/mah/target/exe/shouldBeIgnored.swift",
             "/mah/target/exe/foo.c",
-            "/Sources/foo/foo.swift",
-            "/bar/bar/foo.swift",
-            "/bar/bar/excluded.swift",
-            "/bar/bar/fixture/fix1.swift",
-            "/bar/bar/fixture/fix2.swift"
+            Sources.appending(components: "foo", "foo.swift").pathString,
+            bar.appending(components: "bar", "foo.swift").pathString,
+            bar.appending(components: "bar", "excluded.swift").pathString,
+            bar.appending(components: "bar", "fixture", "fix1.swift").pathString,
+            bar.appending(components: "bar", "fixture", "fix2.swift").pathString
         )
 
-        let manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
             targets: [
                 try TargetDescription(
                     name: "exe",
                     path: "mah/target/exe",
-                    sources: ["swift"]),
+                    sources: [swift.pathString]),
                 try TargetDescription(
                     name: "clib",
                     path: "mah/target/exe",
@@ -616,12 +678,12 @@ class PackageBuilderTests: XCTestCase {
             ]
         )
         PackageBuilderTester(manifest, in: fs) { package, _ in
-            package.checkPredefinedPaths(target: "/Sources", testTarget: "/Tests")
+            package.checkPredefinedPaths(target: Sources, testTarget: "/Tests")
 
             package.checkModule("exe") { module in
                 module.check(c99name: "exe", type: .executable)
                 module.checkSources(root: "/mah/target/exe",
-                    paths: "swift/exe/main.swift", "swift/exe/foo.swift", "swift/bar.swift")
+                    paths: swift.appending(components: "exe", "main.swift").pathString, swift.appending(components: "exe", "foo.swift").pathString, swift.appending(components: "bar.swift").pathString)
             }
 
             package.checkModule("clib") { module in
@@ -636,7 +698,7 @@ class PackageBuilderTests: XCTestCase {
 
             package.checkModule("bar") { module in
                 module.check(c99name: "bar", type: .library)
-                module.checkSources(root: "/bar", paths: "bar/foo.swift")
+                module.checkSources(root: bar.pathString, paths: RelativePath("bar").appending(components: "foo.swift").pathString)
             }
 
             package.checkProduct("exe") { _ in }
@@ -644,13 +706,15 @@ class PackageBuilderTests: XCTestCase {
     }
 
     func testCustomTargetPathsOverlap() throws {
+        let bar: AbsolutePath = "/target/bar"
+
         let fs = InMemoryFileSystem(emptyFiles:
-            "/target/bar/bar.swift",
-            "/target/bar/Tests/barTests.swift"
+            bar.appending(components: "bar.swift").pathString,
+            bar.appending(components: "Tests", "barTests.swift").pathString
         )
 
-        var manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        var manifest = Manifest.createRootManifest(
+            displayName: "pkg",
             targets: [
                 try TargetDescription(
                     name: "bar",
@@ -661,12 +725,12 @@ class PackageBuilderTests: XCTestCase {
                     type: .test),
             ]
         )
-        PackageBuilderTester(manifest, in: fs) { package, diagnotics in
-            diagnotics.check(diagnostic: "target 'barTests' has sources overlapping sources: /target/bar/Tests/barTests.swift", behavior: .error)
+        PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+            diagnostics.check(diagnostic: "target 'barTests' has overlapping sources: \(bar.appending(components: "Tests", "barTests.swift"))", severity: .error)
         }
 
-        manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        manifest = Manifest.createRootManifest(
+            displayName: "pkg",
             targets: [
                 try TargetDescription(
                     name: "bar",
@@ -688,7 +752,7 @@ class PackageBuilderTests: XCTestCase {
 
             package.checkModule("barTests") { module in
                 module.check(c99name: "barTests", type: .test)
-                module.checkSources(root: "/target/bar/Tests", paths: "barTests.swift")
+                module.checkSources(root: bar.appending(components: "Tests").pathString, paths: "barTests.swift")
             }
 
             package.checkProduct("pkgPackageTests")
@@ -696,18 +760,21 @@ class PackageBuilderTests: XCTestCase {
     }
 
     func testPublicHeadersPath() throws {
+        let Sources: AbsolutePath = "/Sources"
+        let Tests: AbsolutePath = "/Tests"
+
         let fs = InMemoryFileSystem(emptyFiles:
-            "/Sources/Foo/inc/module.modulemap",
-            "/Sources/Foo/inc/Foo.h",
-            "/Sources/Foo/Foo_private.h",
-            "/Sources/Foo/Foo.c",
-            "/Sources/Bar/include/module.modulemap",
-            "/Sources/Bar/include/Bar.h",
-            "/Sources/Bar/Bar.c"
+            Sources.appending(components: "Foo", "inc", "module.modulemap").pathString,
+            Sources.appending(components: "Foo", "inc", "Foo.h").pathString,
+            Sources.appending(components: "Foo", "Foo_private.h").pathString,
+            Sources.appending(components: "Foo", "Foo.c").pathString,
+            Sources.appending(components: "Bar", "include", "module.modulemap").pathString,
+            Sources.appending(components: "Bar", "include", "Bar.h").pathString,
+            Sources.appending(components: "Bar", "Bar.c").pathString
         )
 
-        let manifest = Manifest.createV4Manifest(
-            name: "Foo",
+        let manifest = Manifest.createRootManifest(
+            displayName: "Foo",
             targets: [
                 try TargetDescription(
                     name: "Foo",
@@ -718,22 +785,22 @@ class PackageBuilderTests: XCTestCase {
         )
 
         PackageBuilderTester(manifest, in: fs) { package, _ in
-            package.checkPredefinedPaths(target: "/Sources", testTarget: "/Tests")
+            package.checkPredefinedPaths(target: Sources, testTarget: Tests)
 
             package.checkModule("Foo") { module in
-                let clangTarget = module.target as? ClangTarget
-                XCTAssertEqual(clangTarget?.headers.map{ $0.pathString }, ["/Sources/Foo/Foo_private.h", "/Sources/Foo/inc/Foo.h"])
+                let clangTarget = module.target as? ClangModule
+                XCTAssertEqual(clangTarget?.headers.map{ $0.pathString }, [Sources.appending(components: "Foo", "Foo_private.h").pathString, Sources.appending(components: "Foo", "inc", "Foo.h").pathString])
                 module.check(c99name: "Foo", type: .library)
-                module.checkSources(root: "/Sources/Foo", paths: "Foo.c")
-                module.check(includeDir: "/Sources/Foo/inc")
-                module.check(moduleMapType: .custom(AbsolutePath("/Sources/Foo/inc/module.modulemap")))
+                module.checkSources(root: Sources.appending(components: "Foo").pathString, paths: "Foo.c")
+                module.check(includeDir: Sources.appending(components: "Foo", "inc").pathString)
+                module.check(moduleMapType: .custom(Sources.appending(components: "Foo", "inc", "module.modulemap")))
             }
 
             package.checkModule("Bar") { module in
                 module.check(c99name: "Bar", type: .library)
-                module.checkSources(root: "/Sources/Bar", paths: "Bar.c")
-                module.check(includeDir: "/Sources/Bar/include")
-                module.check(moduleMapType: .custom(AbsolutePath("/Sources/Bar/include/module.modulemap")))
+                module.checkSources(root: Sources.appending(components: "Bar").pathString, paths: "Bar.c")
+                module.check(includeDir: Sources.appending(components: "Bar", "include").pathString)
+                module.check(moduleMapType: .custom(Sources.appending(components: "Bar", "include", "module.modulemap")))
             }
         }
     }
@@ -741,15 +808,15 @@ class PackageBuilderTests: XCTestCase {
     func testInvalidPublicHeadersPath() throws {
         let fs = InMemoryFileSystem(emptyFiles:
             "/Sources/Foo/inc/module.modulemap",
-                                    "/Sources/Foo/inc/Foo.h",
-                                    "/Sources/Foo/Foo.c",
-                                    "/Sources/Bar/include/module.modulemap",
-                                    "/Sources/Bar/include/Bar.h",
-                                    "/Sources/Bar/Bar.c"
+            "/Sources/Foo/inc/Foo.h",
+            "/Sources/Foo/Foo.c",
+            "/Sources/Bar/include/module.modulemap",
+            "/Sources/Bar/include/Bar.h",
+            "/Sources/Bar/Bar.c"
         )
 
-        let manifest = Manifest.createV4Manifest(
-            name: "Foo",
+        let manifest = Manifest.createRootManifest(
+            displayName: "Foo",
             targets: [
                 try TargetDescription(
                     name: "Foo",
@@ -760,19 +827,22 @@ class PackageBuilderTests: XCTestCase {
         )
 
         PackageBuilderTester(manifest, in: fs) { _, diagnostics in
-            diagnostics.check(diagnostic: "invalid relative path \'/inc\'; relative path should not begin with \'/\' or \'~\'", behavior: .error)
+            diagnostics.check(diagnostic: "invalid relative path \'/inc\'; relative path should not begin with \'\(AbsolutePath.root)\'", severity: .error)
         }
     }
 
     func testTestsLayoutsv4() throws {
+        let Sources: AbsolutePath = "/Sources"
+
         let fs = InMemoryFileSystem(emptyFiles:
-            "/Sources/A/main.swift",
+            Sources.appending(components: "A", "main.swift").pathString,
             "/Tests/B/Foo.swift",
             "/Tests/ATests/Foo.swift",
-            "/Tests/TheTestOfA/Foo.swift")
+            "/Tests/TheTestOfA/Foo.swift"
+        )
 
-        let manifest = Manifest.createV4Manifest(
-            name: "Foo",
+        let manifest = Manifest.createRootManifest(
+            displayName: "Foo",
             targets: [
                 try TargetDescription(name: "A"),
                 try TargetDescription(name: "TheTestOfA", dependencies: ["A"], type: .test),
@@ -781,7 +851,7 @@ class PackageBuilderTests: XCTestCase {
             ]
         )
         PackageBuilderTester(manifest, in: fs) { package, _ in
-            package.checkPredefinedPaths(target: "/Sources", testTarget: "/Tests")
+            package.checkPredefinedPaths(target: Sources, testTarget: "/Tests")
 
             package.checkModule("A") { module in
                 module.check(c99name: "A", type: .executable)
@@ -818,8 +888,8 @@ class PackageBuilderTests: XCTestCase {
             "/Tests/barTests/bar.swift"
         )
 
-        let manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
             targets: [
                 try TargetDescription(name: "foo"),
                 try TargetDescription(name: "fooTests", type: .test),
@@ -856,8 +926,8 @@ class PackageBuilderTests: XCTestCase {
             "/Sources/Baz/Baz.swift")
 
         // Direct.
-        var manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        var manifest = Manifest.createRootManifest(
+            displayName: "pkg",
             targets: [
                 try TargetDescription(name: "Foo", dependencies: ["Bar"]),
                 try TargetDescription(name: "Bar"),
@@ -880,8 +950,8 @@ class PackageBuilderTests: XCTestCase {
         }
 
         // Transitive.
-        manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        manifest = Manifest.createRootManifest(
+            displayName: "pkg",
             targets: [
                 try TargetDescription(name: "Foo", dependencies: ["Bar"]),
                 try TargetDescription(name: "Bar", dependencies: ["Baz"]),
@@ -909,13 +979,16 @@ class PackageBuilderTests: XCTestCase {
     }
 
     func testTargetDependencies() throws {
-        let fs = InMemoryFileSystem(emptyFiles:
-            "/Sources/Foo/Foo.swift",
-            "/Sources/Bar/Bar.swift",
-            "/Sources/Baz/Baz.swift")
+        let Sources: AbsolutePath = "/Sources"
 
-        let manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        let fs = InMemoryFileSystem(emptyFiles:
+            Sources.appending(components: "Foo", "Foo.swift").pathString,
+            Sources.appending(components: "Bar", "Bar.swift").pathString,
+            Sources.appending(components: "Baz", "Baz.swift").pathString
+        )
+
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
             targets: [
                 try TargetDescription(name: "Bar"),
                 try TargetDescription(name: "Baz"),
@@ -926,11 +999,11 @@ class PackageBuilderTests: XCTestCase {
         )
         PackageBuilderTester(manifest, in: fs) { package, _ in
 
-            package.checkPredefinedPaths(target: "/Sources", testTarget: "/Tests")
+            package.checkPredefinedPaths(target: Sources, testTarget: "/Tests")
 
             package.checkModule("Foo") { module in
                 module.check(c99name: "Foo", type: .library)
-                module.checkSources(root: "/Sources/Foo", paths: "Foo.swift")
+                module.checkSources(root: Sources.appending(components: "Foo").pathString, paths: "Foo.swift")
                 module.check(targetDependencies: ["Bar", "Baz"])
                 module.check(productDependencies: [.init(name: "Bam", package: nil)])
             }
@@ -944,50 +1017,673 @@ class PackageBuilderTests: XCTestCase {
         }
     }
 
-    func testManifestTargetDeclErrors() throws {
+    /// Starting with tools version 5.9, packages are permitted to place
+    /// sources anywhere in ./Sources when a package has a single target.
+    func testRelaxedSourceLocationSingleTargetRegular() throws {
+        let predefinedSourceDir = PackageBuilder.suggestedPredefinedSourceDirectory(type: .regular)
         do {
-            // Reference a target which doesn't exist.
+            // Single target: Sources are expected in ./Sources.
             let fs = InMemoryFileSystem(emptyFiles:
-                "/Foo.swift")
-
-            let manifest = Manifest.createV4Manifest(
-                name: "pkg",
+                "/\(predefinedSourceDir)/Foo.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "Random"),
+                ]
+            )
+            
+            PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+                package.checkModule("Random") { result in
+                    XCTAssertEqual("/\(predefinedSourceDir)", result.target.path)
+                }
+            }
+        }
+        do {
+            // Single target: Sources are expected in ./Sources.
+            // In this case, there is a stray source file at the top-level, and no sources
+            // under ./Sources, so the target Random has no sources.
+            // This results in a *warning* that there are no sources for the target.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/Stray.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
                 targets: [
                     try TargetDescription(name: "Random"),
                 ]
             )
             PackageBuilderTester(manifest, in: fs) { _, diagnostics in
-                diagnostics.check(diagnostic: .contains("Source files for target Random should be located under 'Sources/Random'"), behavior: .error)
+                diagnostics.check(diagnostic: "Source files for target Random should be located under '\(predefinedSourceDir)/Random', '\(predefinedSourceDir)', or a custom sources path can be set with the 'path' property in Package.swift", severity: .warning)
+            }
+        }
+        do {
+            // Single target: Sources are expected in ./Sources. In this case,
+            // there is a stray source file at the top-level which is ignored.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/Stray.swift",
+                "/\(predefinedSourceDir)/Random.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "Random"),
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+                package.checkModule("Random")
+            }
+        }
+        do {
+            // Single target: Sources can be expected in ./Sources/<target>.
+            // If that directory exists, stray sources inside ./Sources will
+            // not be included in the target.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/\(predefinedSourceDir)/Stray.swift",
+                "/\(predefinedSourceDir)/Random/Random.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "Random"),
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+                package.checkModule("Random") { result in
+                    result.checkSources(paths: "Random.swift")
+                }
+            }
+        }
+        do {
+            // Multiple targets: Sources are expected in their respective subdirectories
+            // under Sources
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/Foo.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "TargetA"),
+                    try TargetDescription(name: "TargetB"),
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { _, diagnostics in
+                diagnostics.check(diagnostic: "Source files for target TargetA should be located under '\(predefinedSourceDir)/TargetA', or a custom sources path can be set with the 'path' property in Package.swift", severity: .error)
+            }
+        }
+    }
+
+    func testRelaxedSourceLocationSingleTargetTest() throws {
+        let predefinedSourceDir = PackageBuilder.suggestedPredefinedSourceDirectory(type: .test)
+        do {
+            // Single target: Sources are expected in ./Sources.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/\(predefinedSourceDir)/Foo.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "MyTests", type: .test),
+                ]
+            )
+            
+            PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+                package.checkModule("MyTests") { result in
+                    XCTAssertEqual("/\(predefinedSourceDir)", result.target.path)
+                }
+                package.checkProduct("pkgPackageTests")
+            }
+        }
+        do {
+            // Single target: Sources are expected in ./Tests.
+            // In this case, there is a stray source file at the top-level, and no sources
+            // under ./Tests, so the target RandomTests has no sources.
+            // This results in a *warning* that there are no sources for the target.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/Stray.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "RandomTests", type: .test),
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { _, diagnostics in
+                diagnostics.check(diagnostic: "Source files for target RandomTests should be located under '\(predefinedSourceDir)/RandomTests', '\(predefinedSourceDir)', or a custom sources path can be set with the 'path' property in Package.swift", severity: .warning)
+            }
+        }
+        do {
+            // Single target: Sources are expected in ./Tests. In this case,
+            // there is a stray source file at the top-level which is ignored.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/Stray.swift",
+                "/\(predefinedSourceDir)/RandomTests.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "RandomTests", type: .test),
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+                package.checkModule("RandomTests")
+                package.checkProduct("pkgPackageTests")
+            }
+        }
+        do {
+            // Single target: Sources can be expected in ./Tests/<target>.
+            // If that directory exists, stray sources inside ./Tests will
+            // not be included in the target.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/\(predefinedSourceDir)/Stray.swift",
+                "/\(predefinedSourceDir)/RandomTests/Random.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "RandomTests", type: .test),
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+                package.checkModule("RandomTests") { result in
+                    result.checkSources(paths: "Random.swift")
+                }
+                package.checkProduct("pkgPackageTests")
+            }
+        }
+        do {
+            // Multiple targets: Sources are expected in their respective subdirectories
+            // under Sources
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/Foo.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "TargetA", type: .test),
+                    try TargetDescription(name: "TargetB", type: .test),
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { _, diagnostics in
+                diagnostics.check(diagnostic: "Source files for target TargetA should be located under '\(predefinedSourceDir)/TargetA', or a custom sources path can be set with the 'path' property in Package.swift", severity: .error)
+            }
+        }
+    }
+
+    func testRelaxedSourceLocationSingleTargetPlugin() throws {
+        let predefinedSourceDir = PackageBuilder.suggestedPredefinedSourceDirectory(type: .plugin)
+        do {
+            // Single target: Sources are expected in ./Sources.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/\(predefinedSourceDir)/Foo.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "MyPlugin", type: .plugin, pluginCapability: .buildTool),
+                ]
+            )
+            
+            PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+                package.checkModule("MyPlugin") { result in
+                    result.checkSources(root: result.target.path.appending(component: predefinedSourceDir).pathString, paths: "Foo.swift")
+                }
+            }
+        }
+        do {
+            // Single target: Sources are expected in ./Plugins.
+            // In this case, there is a stray source file at the top-level, and no sources
+            // under ./Plugins, so the target Random has no sources.
+            // This results in a *warning* that there are no sources for the target.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/Stray.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "Random", type: .plugin, pluginCapability: .buildTool),
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { _, diagnostics in
+                diagnostics.check(diagnostic: "Source files for target Random should be located under '\(predefinedSourceDir)/Random', '\(predefinedSourceDir)', or a custom sources path can be set with the 'path' property in Package.swift", severity: .warning)
             }
         }
 
         do {
+            // Single target: Sources are expected in ./Plugins. In this case,
+            // there is a stray source file at the top-level which is ignored.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/Stray.swift",
+                "/\(predefinedSourceDir)/Random.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "Random", type: .plugin, pluginCapability: .buildTool),
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+                package.checkModule("Random")
+            }
+        }
+        do {
+            // Single target: Sources can be expected in ./Plugins/<target>.
+            // If that directory exists, stray sources inside ./Plugins will
+            // not be included in the target.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/\(predefinedSourceDir)/Stray.swift",
+                "/\(predefinedSourceDir)/Random/Random.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "Random", type: .plugin, pluginCapability: .buildTool),
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+                package.checkModule("Random") { result in
+                    result.checkSources(paths: "Random.swift")
+                }
+            }
+        }
+        do {
+            // Multiple targets: Sources are expected in their respective subdirectories
+            // under Sources
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/Foo.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "TargetA", type: .plugin, pluginCapability: .buildTool),
+                    try TargetDescription(name: "TargetB", type: .plugin, pluginCapability: .buildTool),
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { _, diagnostics in
+                diagnostics.check(diagnostic: "Source files for target TargetA should be located under '\(predefinedSourceDir)/TargetA', or a custom sources path can be set with the 'path' property in Package.swift", severity: .error)
+            }
+        }
+    }
+
+    func testRelaxedSourceLocationSingleTargetExecutable() throws {
+        let predefinedSourceDir = PackageBuilder.suggestedPredefinedSourceDirectory(type: .executable)
+        do {
+            // Single target: Sources are expected in ./Sources.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/\(predefinedSourceDir)/Foo.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "MyExe", type: .executable),
+                ]
+            )
+
+            PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+                package.checkModule("MyExe") { result in
+                    XCTAssertEqual("/\(predefinedSourceDir)", result.target.path)
+                }
+                package.checkProduct("MyExe")
+            }
+        }
+        do {
+            // Single target: Sources are expected in ./Sources.
+            // In this case, there is a stray source file at the top-level, and no sources
+            // under ./Sources, so the target Random has no sources.
+            // This results in a *warning* that there are no sources for the target.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/Stray.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "Random", type: .executable),
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { _, diagnostics in
+                diagnostics.check(diagnostic: "Source files for target Random should be located under '\(predefinedSourceDir)/Random', '\(predefinedSourceDir)', or a custom sources path can be set with the 'path' property in Package.swift", severity: .warning)
+            }
+        }
+        do {
+            // Single target: Sources are expected in ./Sources. In this case,
+            // there is a stray source file at the top-level which is ignored.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/Stray.swift",
+                "/\(predefinedSourceDir)/Random.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "Random", type: .executable)
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+                package.checkModule("Random")
+                package.checkProduct("Random")
+            }
+        }
+        do {
+            // Single target: Sources can be expected in ./Sources/<target>.
+            // If that directory exists, stray sources inside ./Sources will
+            // not be included in the target.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/\(predefinedSourceDir)/Stray.swift",
+                "/\(predefinedSourceDir)/Random/Random.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "Random", type: .executable)
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+                package.checkModule("Random") { result in
+                    result.checkSources(paths: "Random.swift")
+                }
+                package.checkProduct("Random")
+            }
+        }
+        do {
+            // Multiple targets: Sources are expected in their respective subdirectories
+            // under Sources
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/Foo.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "TargetA", type: .executable),
+                    try TargetDescription(name: "TargetB", type: .executable)
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { _, diagnostics in
+                diagnostics.check(diagnostic: "Source files for target TargetA should be located under '\(predefinedSourceDir)/TargetA', or a custom sources path can be set with the 'path' property in Package.swift", severity: .error)
+            }
+        }
+    }
+
+    func testRelaxedSourceLocationSingleTargetSystem() throws {
+        let predefinedSourceDir = PackageBuilder.suggestedPredefinedSourceDirectory(type: .system)
+        do {
+            // Single target: Sources are expected in ./Sources.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/\(predefinedSourceDir)/module.modulemap"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "Foo", type: .system),
+                ]
+            )
+
+            PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+                package.checkModule("Foo") { result in
+                    XCTAssertEqual("/\(predefinedSourceDir)", result.target.path)
+                }
+            }
+        }
+        do {
+            // Single target: Sources are expected in ./Sources.
+            // In this case, there is a stray source file at the top-level, and no sources
+            // under ./Sources, so the target Random has no sources.
+            // This results in a *warning* that there are no sources for the target.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/Stray.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "Random", type: .system),
+                ]
+            )
+            let map = "/\(predefinedSourceDir)/module.modulemap"
+            PackageBuilderTester(manifest, in: fs) { _, diagnostics in
+#if _runtime(_ObjC)
+                diagnostics.check(diagnostic: "package has unsupported layout; missing system target module map at '\(map)'", severity: .error)
+#else
+                // FIXME: there is a memory leak here
+                diagnostics.check(diagnostic: "package has unsupported layout; missing system target module map at '\(String(cString: map.fileSystemRepresentation))'", severity: .error)
+#endif
+            }
+        }
+        do {
+            // Single target: Sources are expected in ./Sources. In this case,
+            // there is a stray source file at the top-level which is ignored.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/Stray.swift",
+                "/\(predefinedSourceDir)/module.modulemap"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "Random", type: .system)
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+                package.checkModule("Random")
+            }
+        }
+        do {
+            // Single target: Sources can be expected in ./Sources/<target>.
+            // If that directory exists, stray sources inside ./Sources will
+            // not be included in the target.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/\(predefinedSourceDir)/Stray.swift",
+                "/\(predefinedSourceDir)/module.modulemap"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "Random", type: .system)
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+                package.checkModule("Random") { result in
+                    result.checkSources()
+                }
+            }
+        }
+        do {
+            // Multiple targets: Sources are expected in their respective subdirectories
+            // under Sources
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/Foo.swift")
+
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "TargetA", type: .system),
+                    try TargetDescription(name: "TargetB", type: .system)
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { _, diagnostics in
+                diagnostics.check(diagnostic: "Source files for target TargetA should be located under '\(predefinedSourceDir)/TargetA', or a custom sources path can be set with the 'path' property in Package.swift", severity: .error)
+            }
+        }
+    }
+
+    func testRelaxedSourceLocationSingleTargetMacro() throws {
+        let predefinedSourceDir = PackageBuilder.suggestedPredefinedSourceDirectory(type: .macro)
+        do {
+            // Single target: Sources are expected in ./Sources.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/\(predefinedSourceDir)/Foo.swift"
+            )
+
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "Foo", type: .macro),
+                ]
+            )
+
+            PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+                package.checkModule("Foo") { result in
+                    XCTAssertEqual("/\(predefinedSourceDir)", result.target.path)
+                }
+                package.checkProduct("Foo")
+            }
+        }
+        do {
+            // Single target: Sources are expected in ./Sources.
+            // In this case, there is a stray source file at the top-level, and no sources
+            // under ./Sources, so the target Random has no sources.
+            // This results in a *warning* that there are no sources for the target.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/Stray.swift")
+
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "Random", type: .macro),
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { _, diagnostics in
+                diagnostics.check(diagnostic: "Source files for target Random should be located under '\(predefinedSourceDir)/Random', '\(predefinedSourceDir)', or a custom sources path can be set with the 'path' property in Package.swift", severity: .warning)
+            }
+        }
+        do {
+            // Single target: Sources are expected in ./Sources. In this case,
+            // there is a stray source file at the top-level which is ignored.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/Stray.swift",
+                "/\(predefinedSourceDir)/Random.swift")
+
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "Random", type: .macro)
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+                package.checkModule("Random") { result in
+                    result.checkSources(root: "/\(predefinedSourceDir)", paths: "Random.swift")
+                }
+                package.checkProduct("Random")
+            }
+        }
+        do {
+            // Single target: Sources can be expected in ./Sources/<target>.
+            // If that directory exists, stray sources inside ./Sources will
+            // not be included in the target.
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/\(predefinedSourceDir)/Stray.swift",
+                "/\(predefinedSourceDir)/Random/Random.swift"
+            )
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "Random", type: .macro)
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+                package.checkModule("Random") { result in
+                    result.checkSources(root: "/\(predefinedSourceDir)/Random", paths: "Random.swift")
+                }
+                package.checkProduct("Random")
+            }
+        }
+        do {
+            // Multiple targets: Sources are expected in their respective subdirectories
+            // under Sources
+            let fs = InMemoryFileSystem(emptyFiles:
+                "/Foo.swift")
+
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
+                toolsVersion: .v5_9,
+                targets: [
+                    try TargetDescription(name: "TargetA", type: .macro),
+                    try TargetDescription(name: "TargetB", type: .macro)
+                ]
+            )
+            PackageBuilderTester(manifest, in: fs) { _, diagnostics in
+                diagnostics.check(diagnostic: "Source files for target TargetA should be located under '\(predefinedSourceDir)/TargetA', or a custom sources path can be set with the 'path' property in Package.swift", severity: .error)
+            }
+        }
+    }
+
+    func testStrictSourceLocationPre5_9() throws {
+        do {
+            for fs in [
+                InMemoryFileSystem(emptyFiles:
+                                    "/Sources/Foo.swift"),
+                InMemoryFileSystem(emptyFiles:
+                                    "/Stray.swift"),
+                InMemoryFileSystem(emptyFiles:
+                                    "/Stray.swift",
+                                   "/Sources/Random.swift"),
+            ] {
+                let manifest = Manifest.createRootManifest(
+                    displayName: "pkg",
+                    targets: [
+                        try TargetDescription(name: "Random"),
+                    ]
+                )
+                PackageBuilderTester(manifest, in: fs) { _, diagnostics in
+                    diagnostics.check(diagnostic: .contains("Source files for target Random should be located under 'Sources/Random'"), severity: .error)
+                }
+            }
+        }
+    }
+
+    func testManifestTargetDeclErrors() throws {
+        do {
             let fs = InMemoryFileSystem(emptyFiles:
                 "/src/pkg/Foo.swift")
             // Reference an invalid dependency.
-            let manifest = Manifest.createV4Manifest(
-                name: "pkg",
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
                 targets: [
                     try TargetDescription(name: "pkg", dependencies: [.target(name: "Foo")]),
                 ]
             )
             PackageBuilderTester(manifest, in: fs) { _, diagnostics in
-                diagnostics.check(diagnostic: .contains("Source files for target Foo should be located under 'Sources/Foo'"), behavior: .error)
+                diagnostics.check(diagnostic: .contains("Source files for target Foo should be located under 'Sources/Foo'"), severity: .error)
             }
         }
 
         do {
             let fs = InMemoryFileSystem(emptyFiles:
                 "/Sources/pkg/Foo.swift")
-            let manifest = Manifest.createV4Manifest(
-                name: "pkg",
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
                 targets: [
                     try TargetDescription(name: "pkg", dependencies: []),
                     try TargetDescription(name: "pkgTests", dependencies: [], type: .test),
                 ]
             )
             PackageBuilderTester(manifest, in: fs) { _, diagnostics in
-                diagnostics.check(diagnostic: .contains("Source files for target pkgTests should be located under 'Tests/pkgTests'"), behavior: .error)
+                diagnostics.check(diagnostic: .contains("Source files for target pkgTests should be located under 'Tests/pkgTests'"), severity: .error)
             }
         }
 
@@ -995,45 +1691,37 @@ class PackageBuilderTests: XCTestCase {
             let fs = InMemoryFileSystem(emptyFiles:
                 "/Source/pkg/Foo.swift")
             // Reference self in dependencies.
-            let manifest = Manifest.createV4Manifest(
-                name: "pkg",
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
                 targets: [
                     try TargetDescription(name: "pkg", dependencies: [.target(name: "pkg")]),
                 ]
             )
             PackageBuilderTester(manifest, in: fs) { _, diagnostics in
-                diagnostics.check(diagnostic: "cyclic dependency declaration found: pkg -> pkg", behavior: .error)
-            }
-        }
-
-        do {
-            let fs = InMemoryFileSystem(emptyFiles:
-                "/Source/pkg/Foo.swift")
-            // Reference invalid target.
-            let manifest = Manifest.createV4Manifest(
-                name: "pkg",
-                targets: [
-                    try TargetDescription(name: "foo"),
-                ]
-            )
-            PackageBuilderTester(manifest, in: fs) { _, diagnotics in
-                diagnotics.check(diagnostic: .contains("Source files for target foo should be located under 'Sources/foo'"), behavior: .error)
+                diagnostics.check(diagnostic: "cyclic dependency declaration found: pkg -> pkg", severity: .error)
             }
         }
 
         do {
             let fs = InMemoryFileSystem()
             // Binary target.
-            let manifest = Manifest.createV4Manifest(
-                name: "pkg",
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
                 targets: [
                     try TargetDescription(name: "foo", url: "https://foo.com/foo.zip", type: .binary, checksum: "checksum"),
+                    try TargetDescription(name: "foo2", path: "./foo2.zip", type: .binary)
                 ]
             )
 
-            let remoteArtifacts = [RemoteArtifact(url: "https://foo.com/foo.zip", path: AbsolutePath("/foo.xcframework"))]
-            PackageBuilderTester(manifest, remoteArtifacts: remoteArtifacts, in: fs) { package, _ in
+            try fs.writeFileContents("/foo2.zip", bytes: "")
+
+            let binaryArtifacts = [
+                "foo": BinaryArtifact(kind: .xcframework, originURL: "https://foo.com/foo.zip", path: "/foo.xcframework"),
+                "foo2": BinaryArtifact(kind: .xcframework, originURL: nil, path: "/foo2.xcframework")
+            ]
+            PackageBuilderTester(manifest, binaryArtifacts: binaryArtifacts, in: fs) { package, _ in
                 package.checkModule("foo")
+                package.checkModule("foo2")
             }
         }
 
@@ -1044,8 +1732,8 @@ class PackageBuilderTests: XCTestCase {
                 "/Sources/pkg3/Foo.swift"
             )
             // Cyclic dependency.
-            var manifest = Manifest.createV4Manifest(
-                name: "pkg",
+            var manifest = Manifest.createRootManifest(
+                displayName: "pkg",
                 targets: [
                     try TargetDescription(name: "pkg1", dependencies: ["pkg2"]),
                     try TargetDescription(name: "pkg2", dependencies: ["pkg3"]),
@@ -1053,11 +1741,11 @@ class PackageBuilderTests: XCTestCase {
                 ]
             )
             PackageBuilderTester(manifest, in: fs) { _, diagnostics in
-                diagnostics.check(diagnostic: "cyclic dependency declaration found: pkg1 -> pkg2 -> pkg3 -> pkg1", behavior: .error)
+                diagnostics.check(diagnostic: "cyclic dependency declaration found: pkg1 -> pkg2 -> pkg3 -> pkg1", severity: .error)
             }
 
-            manifest = Manifest.createV4Manifest(
-                name: "pkg",
+            manifest = Manifest.createRootManifest(
+                displayName: "pkg",
                 targets: [
                     try TargetDescription(name: "pkg1", dependencies: ["pkg2"]),
                     try TargetDescription(name: "pkg2", dependencies: ["pkg3"]),
@@ -1065,25 +1753,31 @@ class PackageBuilderTests: XCTestCase {
                 ]
             )
             PackageBuilderTester(manifest, in: fs) { _, diagnostics in
-                diagnostics.check(diagnostic: "cyclic dependency declaration found: pkg1 -> pkg2 -> pkg3 -> pkg2", behavior: .error)
+                diagnostics.check(diagnostic: "cyclic dependency declaration found: pkg1 -> pkg2 -> pkg3 -> pkg2", severity: .error)
             }
         }
 
         do {
+            let pkg2: AbsolutePath = "/Sources/pkg2"
+
             // Reference a target which doesn't have sources.
             let fs = InMemoryFileSystem(emptyFiles:
                 "/Sources/pkg1/Foo.swift",
-                "/Sources/pkg2/readme.txt")
+                pkg2.appending(components: "readme.txt").pathString
+            )
 
-            let manifest = Manifest.createV4Manifest(
-                name: "pkg",
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
                 targets: [
                     try TargetDescription(name: "pkg1", dependencies: ["pkg2"]),
                     try TargetDescription(name: "pkg2"),
                 ]
             )
             PackageBuilderTester(manifest, in: fs) { package, diagnostics in
-                diagnostics.check(diagnostic: "Source files for target pkg2 should be located under /Sources/pkg2", behavior: .warning)
+                diagnostics.check(
+                    diagnostic: .contains("Source files for target pkg2 should be located under 'Sources/pkg2'"),
+                    severity: .warning
+                )
                 package.checkModule("pkg1") { module in
                     module.check(c99name: "pkg1", type: .library)
                     module.checkSources(root: "/Sources/pkg1", paths: "Foo.swift")
@@ -1096,25 +1790,25 @@ class PackageBuilderTests: XCTestCase {
                 "/Sources/Foo/Foo.c",
                 "/Sources/Bar/Bar.c")
 
-            var manifest = Manifest.createV4Manifest(
-                name: "Foo",
+            var manifest = Manifest.createRootManifest(
+                displayName: "Foo",
                 targets: [
                     try TargetDescription(name: "Foo", publicHeadersPath: "../inc"),
                 ]
             )
 
             PackageBuilderTester(manifest, in: fs) { _, diagnostics in
-                diagnostics.check(diagnostic: "public headers directory path for 'Foo' is invalid or not contained in the target", behavior: .error)
+                diagnostics.check(diagnostic: "public headers (\"include\") directory path for 'Foo' is invalid or not contained in the target", severity: .error)
             }
 
-            manifest = Manifest.createV4Manifest(
-                name: "Foo",
+            manifest = Manifest.createRootManifest(
+                displayName: "Foo",
                 targets: [
                     try TargetDescription(name: "Bar", publicHeadersPath: "inc/../../../foo"),
                 ]
             )
             PackageBuilderTester(manifest, in: fs) { _, diagnostics in
-                diagnostics.check(diagnostic: "public headers directory path for 'Bar' is invalid or not contained in the target", behavior: .error)
+                diagnostics.check(diagnostic: "public headers (\"include\") directory path for 'Bar' is invalid or not contained in the target", severity: .error)
             }
         }
 
@@ -1123,14 +1817,14 @@ class PackageBuilderTests: XCTestCase {
                 "/pkg/Sources/Foo/Foo.c",
                 "/foo/Bar.c")
 
-            let manifest = Manifest.createV4Manifest(
-                name: "Foo",
+            let manifest = Manifest.createRootManifest(
+                displayName: "Foo",
                 targets: [
                     try TargetDescription(name: "Foo", path: "../foo"),
                 ]
             )
-            PackageBuilderTester(manifest, path: AbsolutePath("/pkg"), in: fs) { _, diagnostics in
-                diagnostics.check(diagnostic: "target 'Foo' in package 'Foo' is outside the package root", behavior: .error)
+            PackageBuilderTester(manifest, path: "/pkg", in: fs) { package, diagnostics in
+                diagnostics.check(diagnostic: "target 'Foo' in package '\(package.packageIdentity)' is outside the package root", severity: .error)
             }
         }
         do {
@@ -1138,32 +1832,33 @@ class PackageBuilderTests: XCTestCase {
                 "/pkg/Sources/Foo/Foo.c",
                 "/foo/Bar.c")
 
-            let manifest = Manifest.createV4Manifest(
-                name: "Foo",
+            let manifest = Manifest.createRootManifest(
+                displayName: "Foo",
                 targets: [
                     try TargetDescription(name: "Foo", path: "/foo"),
                 ]
             )
-            PackageBuilderTester(manifest, path: AbsolutePath("/pkg"), in: fs) { _, diagnostics in
-                diagnostics.check(diagnostic: "target path \'/foo\' is not supported; it should be relative to package root", behavior: .error)
+            PackageBuilderTester(manifest, path: "/pkg", in: fs) { _, diagnostics in
+                diagnostics.check(diagnostic: "target path \'/foo\' is not supported; it should be relative to package root", severity: .error)
             }
         }
 
+        /*
         do {
             let fs = InMemoryFileSystem(emptyFiles:
                 "/pkg/Sources/Foo/Foo.c",
                 "/foo/Bar.c")
 
-            let manifest = Manifest.createV4Manifest(
-                name: "Foo",
+            let manifest = Manifest.createRootManifest(
+                displayName: "Foo",
                 targets: [
                     try TargetDescription(name: "Foo", path: "~/foo"),
                 ]
             )
-            PackageBuilderTester(manifest, path: AbsolutePath("/pkg"), in: fs) { _, diagnostics in
-                diagnostics.check(diagnostic: "target path \'~/foo\' is not supported; it should be relative to package root", behavior: .error)
+            PackageBuilderTester(manifest, path: "/pkg", in: fs) { _, diagnostics in
+                diagnostics.check(diagnostic: "target path \'~/foo\' is not supported; it should be relative to package root", severity: .error)
             }
-        }
+        }*/
     }
 
     func testExecutableAsADep() throws {
@@ -1172,8 +1867,8 @@ class PackageBuilderTests: XCTestCase {
             "/Sources/exec/main.swift",
             "/Sources/lib/lib.swift")
 
-        let manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
             targets: [
                 try TargetDescription(name: "lib", dependencies: ["exec"]),
                 try TargetDescription(name: "exec"),
@@ -1199,29 +1894,29 @@ class PackageBuilderTests: XCTestCase {
             "/Sources/main.swift"
         )
 
-        var manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        var manifest = Manifest.createRootManifest(
+            displayName: "pkg",
             pkgConfig: "foo"
         )
 
-        PackageBuilderTester(manifest, in: fs) { _, diagnostics in
+        PackageBuilderTester(manifest, in: fs) { package, diagnostics in
             diagnostics.check(
-                diagnostic: "configuration of package 'pkg' is invalid; the 'pkgConfig' property can only be used with a System Module Package",
-                behavior: .error)
+                diagnostic: "configuration of package '\(package.packageIdentity)' is invalid; the 'pkgConfig' property can only be used with a System Module Package",
+                severity: .error)
         }
 
         fs = InMemoryFileSystem(emptyFiles:
             "/Sources/Foo/main.c"
         )
-        manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        manifest = Manifest.createRootManifest(
+            displayName: "pkg",
             providers: [.brew(["foo"])]
         )
 
-        PackageBuilderTester(manifest, in: fs) { _, diagnostics in
+        PackageBuilderTester(manifest, in: fs) { package, diagnostics in
             diagnostics.check(
-                diagnostic: "configuration of package 'pkg' is invalid; the 'providers' property can only be used with a System Module Package",
-                behavior: .error)
+                diagnostic: "configuration of package '\(package.packageIdentity)' is invalid; the 'providers' property can only be used with a System Module Package",
+                severity: .error)
         }
     }
 
@@ -1229,7 +1924,7 @@ class PackageBuilderTests: XCTestCase {
         let fs = InMemoryFileSystem(emptyFiles:
             "/module.modulemap")
 
-        let manifest = Manifest.createV4Manifest(name: "SystemModulePackage")
+        let manifest = Manifest.createRootManifest(displayName: "SystemModulePackage")
         PackageBuilderTester(manifest, in: fs) { package, _ in
             package.checkModule("SystemModulePackage") { module in
                 module.check(c99name: "SystemModulePackage", type: .systemModule)
@@ -1245,8 +1940,8 @@ class PackageBuilderTests: XCTestCase {
         )
 
         func createManifest(swiftVersions: [SwiftLanguageVersion]?) throws -> Manifest {
-            return Manifest.createV4Manifest(
-                name: "pkg",
+            return Manifest.createRootManifest(
+                displayName: "pkg",
                 swiftLanguageVersions: swiftVersions,
                 targets: [
                     try TargetDescription(name: "foo", path: "foo"),
@@ -1287,15 +1982,36 @@ class PackageBuilderTests: XCTestCase {
             package.checkProduct("foo") { _ in }
         }
 
-        manifest = try createManifest(swiftVersions: [])
-        PackageBuilderTester(manifest, in: fs) { _, diagnostics in
-            diagnostics.check(diagnostic: "package 'pkg' supported Swift language versions is empty", behavior: .error)
+        manifest = try createManifest(swiftVersions: [SwiftLanguageVersion(string: "5")!])
+        PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+            package.checkModule("foo") { module in
+                module.check(swiftVersion: "5")
+            }
+            package.checkProduct("foo") { _ in }
         }
 
-        manifest = try createManifest(
-            swiftVersions: [SwiftLanguageVersion(string: "6")!, SwiftLanguageVersion(string: "7")!])
-        PackageBuilderTester(manifest, in: fs) { _, diagnostics in
-            diagnostics.check(diagnostic: "package 'pkg' requires minimum Swift language version 6 which is not supported by the current tools version (\(ToolsVersion.currentToolsVersion))", behavior: .error)
+        manifest = try createManifest(swiftVersions: [SwiftLanguageVersion(string: "6")!])
+        PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+            package.checkModule("foo") { module in
+                module.check(swiftVersion: "6")
+            }
+            package.checkProduct("foo") { _ in }
+        }
+
+        manifest = try createManifest(swiftVersions: [])
+        PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+            diagnostics.check(
+                diagnostic: "package '\(package.packageIdentity)' supported Swift language versions is empty",
+                severity: .error
+            )
+        }
+
+        manifest = try createManifest(swiftVersions: [SwiftLanguageVersion(string: "7")!])
+        PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+            diagnostics.check(
+                diagnostic: "package '\(package.packageIdentity)' requires minimum Swift language version 7 which is not supported by the current tools version (\(ToolsVersion.current))",
+                severity: .error
+            )
         }
     }
 
@@ -1307,8 +2023,8 @@ class PackageBuilderTests: XCTestCase {
                 "/Source/Foo/Foo.swift",
                 "/src/Bar/Bar.swift")
 
-            let manifest = Manifest.createV4Manifest(
-                name: "pkg",
+            let manifest = Manifest.createRootManifest(
+                displayName: "pkg",
                 targets: [
                     try TargetDescription(name: "Foo", dependencies: ["Bar"]),
                     try TargetDescription(name: "Bar"),
@@ -1316,7 +2032,7 @@ class PackageBuilderTests: XCTestCase {
             )
 
             PackageBuilderTester(manifest, in: fs) { _, diagnostics in
-                diagnostics.check(diagnostic: .contains("Source files for target Bar should be located under 'Sources/Bar'"), behavior: .error)
+                diagnostics.check(diagnostic: .contains("Source files for target Bar should be located under 'Sources/Bar'"), severity: .error)
             }
         }
 
@@ -1327,20 +2043,20 @@ class PackageBuilderTests: XCTestCase {
                 "/Tests/FooTests/Foo.swift",
                 "/Source/BarTests/Foo.swift")
 
-            var manifest = Manifest.createV4Manifest(
-                name: "pkg",
+            var manifest = Manifest.createRootManifest(
+                displayName: "pkg",
                 targets: [
                     try TargetDescription(name: "BarTests", type: .test),
                     try TargetDescription(name: "FooTests", type: .test),
                 ]
             )
             PackageBuilderTester(manifest, in: fs) { _, diagnostics in
-                diagnostics.check(diagnostic: .contains("Source files for target BarTests should be located under 'Tests/BarTests'"), behavior: .error)
+                diagnostics.check(diagnostic: .contains("Source files for target BarTests should be located under 'Tests/BarTests'"), severity: .error)
             }
 
             // We should be able to fix this by using custom paths.
-            manifest = Manifest.createV4Manifest(
-                name: "pkg",
+            manifest = Manifest.createRootManifest(
+                displayName: "pkg",
                 targets: [
                     try TargetDescription(name: "BarTests", path: "Source/BarTests", type: .test),
                     try TargetDescription(name: "FooTests", type: .test),
@@ -1361,26 +2077,28 @@ class PackageBuilderTests: XCTestCase {
     func testSpecifiedCustomPathDoesNotExist() throws {
         let fs = InMemoryFileSystem(emptyFiles: "/Foo.swift")
 
-        let manifest = Manifest.createV4Manifest(
-            name: "Foo",
+        let manifest = Manifest.createRootManifest(
+            displayName: "Foo",
             targets: [
                 try TargetDescription(name: "Foo", path: "./NotExist")
             ]
         )
 
         PackageBuilderTester(manifest, in: fs) { _, diagnostics in
-            diagnostics.check(diagnostic: "invalid custom path './NotExist' for target 'Foo'", behavior: .error)
+            diagnostics.check(diagnostic: "invalid custom path './NotExist' for target 'Foo'", severity: .error)
         }
     }
 
     func testSpecialTargetDir() throws {
+        let src: AbsolutePath = "/src"
         // Special directory should be src because both target and test target are under it.
         let fs = InMemoryFileSystem(emptyFiles:
-            "/src/A/Foo.swift",
-            "/src/ATests/Foo.swift")
+            src.appending(components: "A", "Foo.swift").pathString,
+            src.appending(components: "ATests", "Foo.swift").pathString
+        )
 
-        let manifest = Manifest.createV4Manifest(
-            name: "Foo",
+        let manifest = Manifest.createRootManifest(
+            displayName: "Foo",
             targets: [
                 try TargetDescription(name: "A"),
                 try TargetDescription(name: "ATests", type: .test),
@@ -1388,7 +2106,7 @@ class PackageBuilderTests: XCTestCase {
         )
 
         PackageBuilderTester(manifest, in: fs) { package, _ in
-            package.checkPredefinedPaths(target: "/src", testTarget: "/src")
+            package.checkPredefinedPaths(target: src, testTarget: src)
 
             package.checkModule("A") { module in
                 module.check(c99name: "A", type: .library)
@@ -1408,8 +2126,8 @@ class PackageBuilderTests: XCTestCase {
             "/Sources/bar/bar.swift"
         )
 
-        let manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
             targets: [
                 try TargetDescription(
                     name: "bar",
@@ -1433,13 +2151,13 @@ class PackageBuilderTests: XCTestCase {
             "/Sources/foo/foo.swift"
         )
 
-        let manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
             products: [
-                ProductDescription(name: "foo", type: .library(.automatic), targets: ["foo"]),
-                ProductDescription(name: "foo", type: .library(.static), targets: ["foo"]),
-                ProductDescription(name: "foo", type: .library(.dynamic), targets: ["foo"]),
-                ProductDescription(name: "foo-dy", type: .library(.dynamic), targets: ["foo"]),
+                try ProductDescription(name: "foo", type: .library(.automatic), targets: ["foo"]),
+                try ProductDescription(name: "foo", type: .library(.static), targets: ["foo"]),
+                try ProductDescription(name: "foo", type: .library(.dynamic), targets: ["foo"]),
+                try ProductDescription(name: "foo-dy", type: .library(.dynamic), targets: ["foo"]),
             ],
             targets: [
                 try TargetDescription(name: "foo"),
@@ -1454,13 +2172,13 @@ class PackageBuilderTests: XCTestCase {
                 product.check(type: .library(.dynamic), targets: ["foo"])
             }
             diagnostics.check(
-                diagnostic: "ignoring duplicate product 'foo' (static)",
-                behavior: .warning,
-                location: "'pkg' /")
+                diagnostic: "ignoring duplicate product 'foo' (static library)",
+                severity: .warning
+            )
             diagnostics.check(
-                diagnostic: "ignoring duplicate product 'foo' (dynamic)",
-                behavior: .warning,
-                location: "'pkg' /")
+                diagnostic: "ignoring duplicate product 'foo' (dynamic library)",
+                severity: .warning
+            )
         }
     }
 
@@ -1471,8 +2189,8 @@ class PackageBuilderTests: XCTestCase {
             "/Sources/bar/main.swift"
         )
 
-        let manifest = Manifest.createV4Manifest(
-            name: "SystemModulePackage",
+        let manifest = Manifest.createRootManifest(
+            displayName: "SystemModulePackage",
             targets: [
                 try TargetDescription(name: "foo"),
                 try TargetDescription(name: "bar"),
@@ -1485,8 +2203,8 @@ class PackageBuilderTests: XCTestCase {
             }
             diagnostics.check(
                 diagnostic: "ignoring declared target(s) 'foo, bar' in the system package",
-                behavior: .warning,
-                location: "'SystemModulePackage' /")
+                severity: .warning
+            )
         }
     }
 
@@ -1496,10 +2214,10 @@ class PackageBuilderTests: XCTestCase {
             "/Sources/bar/bar.swift"
         )
 
-        let manifest = Manifest.createV4Manifest(
-            name: "pkg",
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
             products: [
-                ProductDescription(name: "foo", type: .library(.automatic), targets: ["foo"]),
+                try ProductDescription(name: "foo", type: .library(.automatic), targets: ["foo"]),
             ],
             targets: [
                 try TargetDescription(name: "foo", type: .system),
@@ -1523,15 +2241,17 @@ class PackageBuilderTests: XCTestCase {
     }
 
     func testSystemLibraryTargetDiagnostics() throws {
+        let Sources: AbsolutePath = "/Sources"
+
         let fs = InMemoryFileSystem(emptyFiles:
-            "/Sources/foo/module.modulemap",
-            "/Sources/bar/bar.swift"
+            Sources.appending(components: "foo", "module.modulemap").pathString,
+            Sources.appending(components: "bar", "bar.swift").pathString
         )
 
-        var manifest = Manifest.createV4Manifest(
-            name: "SystemModulePackage",
+        var manifest = Manifest.createRootManifest(
+            displayName: "SystemModulePackage",
             products: [
-                ProductDescription(name: "foo", type: .library(.automatic), targets: ["foo", "bar"]),
+                try ProductDescription(name: "foo", type: .library(.automatic), targets: ["foo", "bar"]),
             ],
             targets: [
                 try TargetDescription(name: "foo", type: .system),
@@ -1543,14 +2263,14 @@ class PackageBuilderTests: XCTestCase {
             package.checkModule("bar") { _ in }
             diagnostics.check(
                 diagnostic: "system library product foo shouldn't have a type and contain only one target",
-                behavior: .error,
-                location: "'SystemModulePackage' /")
+                severity: .error
+            )
         }
 
-        manifest = Manifest.createV4Manifest(
-            name: "SystemModulePackage",
+        manifest = Manifest.createRootManifest(
+            displayName: "SystemModulePackage",
             products: [
-                ProductDescription(name: "foo", type: .library(.static), targets: ["foo"]),
+                try ProductDescription(name: "foo", type: .library(.static), targets: ["foo"]),
             ],
             targets: [
                 try TargetDescription(name: "foo", type: .system),
@@ -1562,14 +2282,14 @@ class PackageBuilderTests: XCTestCase {
             package.checkModule("bar") { _ in }
             diagnostics.check(
                 diagnostic: "system library product foo shouldn't have a type and contain only one target",
-                behavior: .error,
-                location: "'SystemModulePackage' /")
+                severity: .error
+            )
         }
-        
-        manifest = Manifest.createV4Manifest(
-            name: "bar",
+
+        manifest = Manifest.createRootManifest(
+            displayName: "bar",
             products: [
-                ProductDescription(name: "bar", type: .library(.automatic), targets: ["bar"])
+                try ProductDescription(name: "bar", type: .library(.automatic), targets: ["bar"])
             ],
             targets: [
                 try TargetDescription(name: "bar", type: .system)
@@ -1577,8 +2297,8 @@ class PackageBuilderTests: XCTestCase {
         )
         PackageBuilderTester(manifest, in: fs) { _, diagnostics in
             diagnostics.check(
-                diagnostic: "package has unsupported layout; missing system target module map at '/Sources/bar/module.modulemap'",
-                behavior: .error
+                diagnostic: "package has unsupported layout; missing system target module map at '\(Sources.appending(components: "bar", "module.modulemap"))'",
+                severity: .error
             )
         }
     }
@@ -1588,21 +2308,24 @@ class PackageBuilderTests: XCTestCase {
             "/Sources/foo1/main.swift",
             "/Sources/foo2/main.swift",
             "/Sources/FooLib1/lib.swift",
-            "/Sources/FooLib2/lib.swift"
+            "/Sources/FooLib2/lib.swift",
+            "/Plugins/Plugin1/plugin.swift"
         )
 
-        let manifest = Manifest.createV4Manifest(
-            name: "MyPackage",
+        let manifest = Manifest.createRootManifest(
+            displayName: "MyPackage",
             products: [
-                ProductDescription(name: "foo1", type: .executable, targets: ["FooLib1"]),
-                ProductDescription(name: "foo2", type: .executable, targets: ["FooLib1", "FooLib2"]),
-                ProductDescription(name: "foo3", type: .executable, targets: ["foo1", "foo2"]),
+                try ProductDescription(name: "foo1", type: .executable, targets: ["FooLib1"]),
+                try ProductDescription(name: "foo2", type: .executable, targets: ["FooLib1", "FooLib2"]),
+                try ProductDescription(name: "foo3", type: .executable, targets: ["foo1", "foo2"]),
+                try ProductDescription(name: "foo3", type: .executable, targets: ["foo1", "Plugin1"])
             ],
             targets: [
                 try TargetDescription(name: "foo1"),
                 try TargetDescription(name: "foo2"),
                 try TargetDescription(name: "FooLib1"),
                 try TargetDescription(name: "FooLib2"),
+                try TargetDescription(name: "Plugin1", type: .plugin, pluginCapability: .buildTool),
             ]
         )
         PackageBuilderTester(manifest, in: fs) { package, diagnostics in
@@ -1610,34 +2333,68 @@ class PackageBuilderTests: XCTestCase {
             package.checkModule("foo2") { _ in }
             package.checkModule("FooLib1") { _ in }
             package.checkModule("FooLib2") { _ in }
+            package.checkModule("Plugin1") { _ in }
             diagnostics.check(
                 diagnostic: """
                     executable product 'foo1' expects target 'FooLib1' to be executable; an executable target requires \
                     a 'main.swift' file
                     """,
-                behavior: .error,
-                location: "'MyPackage' /")
+                severity: .error
+            )
             diagnostics.check(
                 diagnostic: """
                     executable product 'foo2' should have one executable target; an executable target requires a \
                     'main.swift' file
                     """,
-                behavior: .error,
-                location: "'MyPackage' /")
+                severity: .error
+            )
             diagnostics.check(
                 diagnostic: "executable product 'foo3' should not have more than one executable target",
-                behavior: .error,
-                location: "'MyPackage' /")
+                severity: .error
+            )
+            diagnostics.check(
+                diagnostic: "executable product 'foo3' should not contain plugin targets (it has 'Plugin1')",
+                severity: .error
+            )
         }
     }
+
+    func testLibraryProductDiagnostics() throws {
+        let fs = InMemoryFileSystem(emptyFiles:
+            "/Sources/MyLibrary/library.swift",
+            "/Plugins/MyPlugin/plugin.swift"
+        )
+
+        let manifest = Manifest.createRootManifest(
+            displayName: "MyPackage",
+            products: [
+                try ProductDescription(name: "MyLibrary", type: .library(.automatic), targets: ["MyLibrary", "MyPlugin"])
+            ],
+            targets: [
+                try TargetDescription(name: "MyLibrary", type: .regular),
+                try TargetDescription(name: "MyPlugin", type: .plugin, pluginCapability: .buildTool)
+            ]
+        )
+        PackageBuilderTester(manifest, in: fs) { package, diagnostics in
+            package.checkModule("MyLibrary") { _ in }
+            package.checkModule("MyPlugin") { _ in }
+            diagnostics.check(
+                diagnostic: """
+                    library product 'MyLibrary' should not contain plugin targets (it has 'MyPlugin')
+                    """,
+                severity: .error
+            )
+        }
+    }
+
 
     func testBadREPLPackage() throws {
         let fs = InMemoryFileSystem(emptyFiles:
             "/Sources/exe/main.swift"
         )
 
-        let manifest = Manifest.createV4Manifest(
-            name: "Pkg",
+        let manifest = Manifest.createRootManifest(
+            displayName: "Pkg",
             targets: [
                 try TargetDescription(name: "exe"),
             ]
@@ -1648,112 +2405,8 @@ class PackageBuilderTests: XCTestCase {
             package.checkProduct("exe") { _ in }
             diagnostics.check(
                 diagnostic: "unable to synthesize a REPL product as there are no library targets in the package",
-                behavior: .error,
-                location: "'Pkg' /")
-        }
-    }
-
-    func testPlatforms() throws {
-        let fs = InMemoryFileSystem(emptyFiles:
-            "/Sources/foo/module.modulemap",
-            "/Sources/bar/bar.swift",
-            "/Sources/cbar/bar.c",
-            "/Sources/cbar/include/bar.h",
-            "/Tests/test/test.swift"
-        )
-
-        // One platform with an override.
-        var manifest = Manifest.createManifest(
-            name: "pkg",
-            platforms: [
-                PlatformDescription(name: "macos", version: "10.12", options: ["option1"]),
-            ],
-            v: .v5,
-            targets: [
-                try TargetDescription(name: "foo", type: .system),
-                try TargetDescription(name: "cbar"),
-                try TargetDescription(name: "bar", dependencies: ["foo"]),
-                try TargetDescription(name: "test", type: .test)
-            ]
-        )
-
-        var expectedPlatforms = [
-            "linux": "0.0",
-            "macos": "10.12",
-            "ios": "9.0",
-            "tvos": "9.0",
-            "watchos": "2.0",
-            "android": "0.0",
-            "windows": "0.0",
-            "wasi": "0.0",
-        ]
-
-        PackageBuilderTester(manifest, in: fs) { package, _ in
-            package.checkModule("foo") { t in
-                t.checkPlatforms(expectedPlatforms)
-                t.checkPlatformOptions(.macOS, options: ["option1"])
-                t.checkPlatformOptions(.iOS, options: [])
-
-            }
-            package.checkModule("bar") { t in
-                t.checkPlatforms(expectedPlatforms)
-                t.checkPlatformOptions(.macOS, options: ["option1"])
-                t.checkPlatformOptions(.iOS, options: [])
-
-            }
-            package.checkModule("cbar") { t in
-                t.checkPlatforms(expectedPlatforms)
-                t.checkPlatformOptions(.macOS, options: ["option1"])
-                t.checkPlatformOptions(.iOS, options: [])
-            }
-            package.checkModule("test") { t in
-                var expected = expectedPlatforms
-                [PackageModel.Platform.macOS, .iOS, .tvOS, .watchOS].forEach {
-                    expected[$0.name] = PackageBuilderTester.xcTestMinimumDeploymentTargets[$0]?.versionString
-                }
-                t.checkPlatforms(expected)
-                t.checkPlatformOptions(.macOS, options: ["option1"])
-                t.checkPlatformOptions(.iOS, options: [])
-            }
-            package.checkProduct("pkgPackageTests") { _ in }
-        }
-
-        // Two platforms with overrides.
-        manifest = Manifest.createManifest(
-            name: "pkg",
-            platforms: [
-                PlatformDescription(name: "macos", version: "10.12"),
-                PlatformDescription(name: "tvos", version: "10.0"),
-            ],
-            v: .v5,
-            targets: [
-                try TargetDescription(name: "foo", type: .system),
-                try TargetDescription(name: "cbar"),
-                try TargetDescription(name: "bar", dependencies: ["foo"]),
-            ]
-        )
-
-        expectedPlatforms = [
-            "macos": "10.12",
-            "tvos": "10.0",
-            "linux": "0.0",
-            "ios": "9.0",
-            "watchos": "2.0",
-            "android": "0.0",
-            "windows": "0.0",
-            "wasi": "0.0",
-        ]
-
-        PackageBuilderTester(manifest, in: fs) { package, _ in
-            package.checkModule("foo") { t in
-                t.checkPlatforms(expectedPlatforms)
-            }
-            package.checkModule("bar") { t in
-                t.checkPlatforms(expectedPlatforms)
-            }
-            package.checkModule("cbar") { t in
-                t.checkPlatforms(expectedPlatforms)
-            }
+                severity: .error
+            )
         }
     }
 
@@ -1766,9 +2419,9 @@ class PackageBuilderTests: XCTestCase {
             "/Sources/lib/include/lib.h"
         )
 
-        let manifest = Manifest.createManifest(
-            name: "pkg",
-            v: .v4_2,
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
+            toolsVersion: .v4_2,
             targets: [
                 try TargetDescription(name: "lib", dependencies: []),
             ]
@@ -1789,15 +2442,15 @@ class PackageBuilderTests: XCTestCase {
             "/Sources/lib/include/lib.h"
         )
 
-        let diagnostics = DiagnosticsEngine()
-        let manifest = Manifest.createManifest(
-            name: "Pkg",
-            v: .v5,
+        //let observability = ObservabilitySystem.makeForTesting()
+        let manifest = Manifest.createRootManifest(
+            displayName: "Pkg",
+            toolsVersion: .v5,
             targets: [
                 try TargetDescription(name: "lib", dependencies: []),
             ]
         )
-        XCTAssertNoDiagnostics(diagnostics)
+        //XCTAssertNoDiagnostics(observability.diagnostics)
 
         PackageBuilderTester(manifest, in: fs) { package, _ in
             package.checkModule("lib") { module in
@@ -1807,16 +2460,18 @@ class PackageBuilderTests: XCTestCase {
     }
 
     func testUnknownSourceFilesUnderDeclaredSourcesIgnoredInV5_2Manifest() throws {
+        let lib: AbsolutePath = "/Sources/lib"
+
         // Files with unknown suffixes under declared sources are not considered valid sources in 5.2 manifest.
         let fs = InMemoryFileSystem(emptyFiles:
-            "/Sources/lib/movie.mkv",
-            "/Sources/lib/lib.c",
-            "/Sources/lib/include/lib.h"
+            lib.appending(components: "movie.mkv").pathString,
+            lib.appending(components: "lib.c").pathString,
+            lib.appending(components: "include", "lib.h").pathString
         )
 
-        let manifest = Manifest.createManifest(
-            name: "pkg",
-            v: .v5_2,
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
+            toolsVersion: .v5_2,
             targets: [
                 try TargetDescription(name: "lib", dependencies: [], path: "./Sources/lib", sources: ["."]),
             ]
@@ -1824,24 +2479,26 @@ class PackageBuilderTests: XCTestCase {
 
         PackageBuilderTester(manifest, in: fs) { package, _ in
             package.checkModule("lib") { module in
-                module.checkSources(root: "/Sources/lib", paths: "lib.c")
-                module.check(includeDir: "/Sources/lib/include")
-                module.check(moduleMapType: .umbrellaHeader(AbsolutePath("/Sources/lib/include/lib.h")))
+                module.checkSources(root: lib.pathString, paths: "lib.c")
+                module.check(includeDir: lib.appending(components: "include").pathString)
+                module.check(moduleMapType: .umbrellaHeader(lib.appending(components: "include", "lib.h")))
             }
         }
     }
 
     func testUnknownSourceFilesUnderDeclaredSourcesCompiledInV5_3Manifest() throws {
+        let lib: AbsolutePath = "/Sources/lib"
+
         // Files with unknown suffixes under declared sources are treated as compilable in 5.3 manifest.
         let fs = InMemoryFileSystem(emptyFiles:
-            "/Sources/lib/movie.mkv",
-            "/Sources/lib/lib.c",
-            "/Sources/lib/include/lib.h"
+            lib.appending(components: "movie.mkv").pathString,
+            lib.appending(components: "lib.c").pathString,
+            lib.appending(components: "include", "lib.h").pathString
         )
 
-        let manifest = Manifest.createManifest(
-            name: "pkg",
-            v: .v5_3,
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
+            toolsVersion: .v5_3,
             targets: [
                 try TargetDescription(name: "lib", dependencies: [], path: "./Sources/lib", sources: ["."]),
             ]
@@ -1849,9 +2506,9 @@ class PackageBuilderTests: XCTestCase {
 
         PackageBuilderTester(manifest, in: fs) { package, _ in
             package.checkModule("lib") { module in
-                module.checkSources(root: "/Sources/lib", paths: "movie.mkv", "lib.c")
-                module.check(includeDir: "/Sources/lib/include")
-                module.check(moduleMapType: .umbrellaHeader(AbsolutePath("/Sources/lib/include/lib.h")))
+                module.checkSources(root: lib.pathString, paths: "movie.mkv", "lib.c")
+                module.check(includeDir: lib.appending(components: "include").pathString)
+                module.check(moduleMapType: .umbrellaHeader(lib.appending(components: "include", "lib.h")))
             }
         }
     }
@@ -1865,40 +2522,40 @@ class PackageBuilderTests: XCTestCase {
             "/Sources/cbar/include/bar.h"
         )
 
-        let manifest = Manifest.createManifest(
-            name: "pkg",
-            v: .v5,
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
+            toolsVersion: .v5,
             targets: [
                 try TargetDescription(
                     name: "cbar",
                     settings: [
-                        .init(tool: .c, name: .headerSearchPath, value: ["Sources/headers"]),
-                        .init(tool: .cxx, name: .headerSearchPath, value: ["Sources/cppheaders"]),
+                        .init(tool: .c, kind: .headerSearchPath("Sources/headers")),
+                        .init(tool: .cxx, kind: .headerSearchPath("Sources/cppheaders")),
 
-                        .init(tool: .c, name: .define, value: ["CCC=2"]),
-                        .init(tool: .cxx, name: .define, value: ["CXX"]),
-                        .init(tool: .cxx, name: .define, value: ["RCXX"], condition: .init(config: "release")),
+                        .init(tool: .c, kind: .define("CCC=2")),
+                        .init(tool: .cxx, kind: .define("CXX")),
+                        .init(tool: .cxx, kind: .define("RCXX"), condition: .init(config: "release")),
 
-                        .init(tool: .c, name: .unsafeFlags, value: ["-Icfoo", "-L", "cbar"]),
-                        .init(tool: .cxx, name: .unsafeFlags, value: ["-Icxxfoo", "-L", "cxxbar"]),
+                        .init(tool: .c, kind: .unsafeFlags(["-Icfoo", "-L", "cbar"])),
+                        .init(tool: .cxx, kind: .unsafeFlags(["-Icxxfoo", "-L", "cxxbar"])),
                     ]
                 ),
                 try TargetDescription(
                     name: "bar", dependencies: ["foo"],
                     settings: [
-                        .init(tool: .swift, name: .define, value: ["SOMETHING"]),
-                        .init(tool: .swift, name: .define, value: ["LINUX"], condition: .init(platformNames: ["linux"])),
-                        .init(tool: .swift, name: .define, value: ["RLINUX"], condition: .init(platformNames: ["linux"], config: "release")),
-                        .init(tool: .swift, name: .define, value: ["DMACOS"], condition: .init(platformNames: ["macos"], config: "debug")),
-                        .init(tool: .swift, name: .unsafeFlags, value: ["-Isfoo", "-L", "sbar"]),
+                        .init(tool: .swift, kind: .define("SOMETHING")),
+                        .init(tool: .swift, kind: .define("LINUX"), condition: .init(platformNames: ["linux"])),
+                        .init(tool: .swift, kind: .define("RLINUX"), condition: .init(platformNames: ["linux"], config: "release")),
+                        .init(tool: .swift, kind: .define("DMACOS"), condition: .init(platformNames: ["macos"], config: "debug")),
+                        .init(tool: .swift, kind: .unsafeFlags(["-Isfoo", "-L", "sbar"])),
                     ]
                 ),
                 try TargetDescription(
                     name: "exe", dependencies: ["bar"],
                     settings: [
-                        .init(tool: .linker, name: .linkedLibrary, value: ["sqlite3"]),
-                        .init(tool: .linker, name: .linkedFramework, value: ["CoreData"], condition: .init(platformNames: ["ios"])),
-                        .init(tool: .linker, name: .unsafeFlags, value: ["-Ilfoo", "-L", "lbar"]),
+                        .init(tool: .linker, kind: .linkedLibrary("sqlite3")),
+                        .init(tool: .linker, kind: .linkedFramework("CoreData"), condition: .init(platformNames: ["ios"])),
+                        .init(tool: .linker, kind: .unsafeFlags(["-Ilfoo", "-L", "lbar"])),
                     ]
                 ),
             ]
@@ -1968,43 +2625,119 @@ class PackageBuilderTests: XCTestCase {
         }
     }
 
+    func testEmptyUnsafeFlagsAreAllowed() throws {
+        let fs = InMemoryFileSystem(emptyFiles:
+            "/Sources/foo/foo.swift",
+            "/Sources/bar/bar.cpp",
+            "/Sources/bar/bar.c",
+            "/Sources/bar/include/bar.h"
+        )
+
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
+            toolsVersion: .v5,
+            targets: [
+                try TargetDescription(
+                    name: "foo",
+                    settings: [
+                        .init(tool: .c, kind: .unsafeFlags([])),
+                        .init(tool: .cxx, kind: .unsafeFlags([])),
+                        .init(tool: .cxx, kind: .unsafeFlags([]), condition: .init(config: "release")),
+                        .init(tool: .linker, kind: .unsafeFlags([])),
+                    ]
+                ),
+                try TargetDescription(
+                    name: "bar",
+                    settings: [
+                        .init(tool: .swift, kind: .unsafeFlags([]), condition: .init(platformNames: ["macos"], config: "debug")),
+                        .init(tool: .linker, kind: .unsafeFlags([])),
+                        .init(tool: .linker, kind: .unsafeFlags([]), condition: .init(platformNames: ["linux"])),
+                    ]
+                ),
+            ]
+        )
+
+        PackageBuilderTester(manifest, in: fs) { package, _ in
+            package.checkModule("foo") { package in
+                let macosDebugScope = BuildSettings.Scope(
+                    package.target.buildSettings,
+                    environment: BuildEnvironment(platform: .macOS, configuration: .debug)
+                )
+                XCTAssertEqual(macosDebugScope.evaluate(.OTHER_CFLAGS), [])
+                XCTAssertEqual(macosDebugScope.evaluate(.OTHER_CPLUSPLUSFLAGS), [])
+                XCTAssertEqual(macosDebugScope.evaluate(.OTHER_LDFLAGS), [])
+
+                let macosReleaseScope = BuildSettings.Scope(
+                    package.target.buildSettings,
+                    environment: BuildEnvironment(platform: .macOS, configuration: .release)
+                )
+                XCTAssertEqual(macosReleaseScope.evaluate(.OTHER_CFLAGS), [])
+                XCTAssertEqual(macosReleaseScope.evaluate(.OTHER_CPLUSPLUSFLAGS), [])
+                XCTAssertEqual(macosReleaseScope.evaluate(.OTHER_LDFLAGS), [])
+            }
+
+            package.checkModule("bar") { package in
+                let linuxDebugScope = BuildSettings.Scope(
+                    package.target.buildSettings,
+                    environment: BuildEnvironment(platform: .linux, configuration: .debug)
+                )
+                XCTAssertEqual(linuxDebugScope.evaluate(.OTHER_SWIFT_FLAGS), [])
+                XCTAssertEqual(linuxDebugScope.evaluate(.OTHER_LDFLAGS), [])
+
+                let linuxReleaseScope = BuildSettings.Scope(
+                    package.target.buildSettings,
+                    environment: BuildEnvironment(platform: .linux, configuration: .release)
+                )
+                XCTAssertEqual(linuxReleaseScope.evaluate(.OTHER_SWIFT_FLAGS), [])
+                XCTAssertEqual(linuxReleaseScope.evaluate(.OTHER_LDFLAGS), [])
+
+                let macosDebugScope = BuildSettings.Scope(
+                    package.target.buildSettings,
+                    environment: BuildEnvironment(platform: .macOS, configuration: .debug)
+                )
+                XCTAssertEqual(macosDebugScope.evaluate(.OTHER_SWIFT_FLAGS), [])
+                XCTAssertEqual(macosDebugScope.evaluate(.OTHER_LDFLAGS), [])
+            }
+        }
+    }
+
     func testInvalidHeaderSearchPath() throws {
         let fs = InMemoryFileSystem(emptyFiles:
             "/pkg/Sources/exe/main.swift"
         )
 
-        let manifest1 = Manifest.createManifest(
-            name: "pkg",
-            v: .v5,
+        let manifest1 = Manifest.createRootManifest(
+            displayName: "pkg",
+            toolsVersion: .v5,
             targets: [
                 try TargetDescription(
                     name: "exe",
                     settings: [
-                        .init(tool: .c, name: .headerSearchPath, value: ["/Sources/headers"]),
+                        .init(tool: .c, kind: .headerSearchPath("/Sources/headers")),
                     ]
                 ),
             ]
         )
 
-        PackageBuilderTester(manifest1, path: AbsolutePath("/pkg"), in: fs) { package, diagnostics in
-            diagnostics.check(diagnostic: "invalid relative path '/Sources/headers'; relative path should not begin with '/' or '~'", behavior: .error)
+        PackageBuilderTester(manifest1, path: "/pkg", in: fs) { package, diagnostics in
+            diagnostics.check(diagnostic: "invalid relative path '/Sources/headers'; relative path should not begin with '\(AbsolutePath.root)'", severity: .error)
         }
 
-        let manifest2 = Manifest.createManifest(
-            name: "pkg",
-            v: .v5,
+        let manifest2 = Manifest.createRootManifest(
+            displayName: "pkg",
+            toolsVersion: .v5,
             targets: [
                 try TargetDescription(
                     name: "exe",
                     settings: [
-                        .init(tool: .c, name: .headerSearchPath, value: ["../../.."]),
+                        .init(tool: .c, kind: .headerSearchPath("../../..")),
                     ]
                 ),
             ]
         )
 
-        PackageBuilderTester(manifest2, path: AbsolutePath("/pkg"), in: fs) { _, diagnostics in
-            diagnostics.check(diagnostic: "invalid header search path '../../..'; header search path should not be outside the package root", behavior: .error)
+        PackageBuilderTester(manifest2, path: "/pkg", in: fs) { _, diagnostics in
+            diagnostics.check(diagnostic: "invalid header search path '../../..'; header search path should not be outside the package root", severity: .error)
         }
     }
 
@@ -2012,33 +2745,70 @@ class PackageBuilderTests: XCTestCase {
         let fs = InMemoryFileSystem(emptyFiles:
             "/Foo/Sources/Foo/foo.swift",
             "/Foo/Sources/Foo2/foo.swift",
-            "/Bar/Sources/Bar/bar.swift"
+            "/Foo/Sources/Foo3/foo.swift",
+            "/Foo/Sources/Qux/foo.swift",
+            "/Bar/Sources/Bar/bar.swift",
+            "/Bar/Sources/Bar2/bar.swift",
+            "/Bar/Sources/Qux/bar.swift"
         )
 
-        let manifest1 = Manifest.createManifest(
-            name: "Foo",
-            v: .v5,
+        let manifest = Manifest.createRootManifest(
+            displayName: "Foo",
+            toolsVersion: .v5,
             dependencies: [
-                PackageDependencyDescription(url: "/Bar", requirement: .upToNextMajor(from: "1.0.0")),
+                .localSourceControl(path: "/Bar", requirement: .upToNextMajor(from: "1.0.0")),
             ],
             targets: [
                 try TargetDescription(
                     name: "Foo",
                     dependencies: [
+                        // invalid - same target in package "Bar"
                         "Bar",
                         "Bar",
+                        
+                        // invalid - same target in package "Bar"
+                        "Bar2",
+                        .product(name: "Bar2", package: "Bar"),
+                        
+                        // invalid - same target in this package
                         "Foo2",
                         "Foo2",
+                        
+                        // invalid - same target in this package
+                        "Foo3",
+                        .target(name: "Foo3"),
+                        
+                        // valid - different packages
+                        "Qux",
+                        .product(name: "Qux", package: "Bar")
                     ]),
                 try TargetDescription(name: "Foo2"),
+                try TargetDescription(name: "Foo3"),
+                try TargetDescription(name: "Qux")
             ]
         )
 
-        PackageBuilderTester(manifest1, path: AbsolutePath("/Foo"), in: fs) { package, diagnostics in
+        PackageBuilderTester(manifest, path: "/Foo", in: fs) { package, diagnostics in
             package.checkModule("Foo")
             package.checkModule("Foo2")
-            diagnostics.checkUnordered(diagnostic: "invalid duplicate target dependency declaration 'Bar' in target 'Foo'", behavior: .warning)
-            diagnostics.checkUnordered(diagnostic: "invalid duplicate target dependency declaration 'Foo2' in target 'Foo'", behavior: .warning)
+            package.checkModule("Foo3")
+            package.checkModule("Qux")
+            diagnostics.checkUnordered(
+                diagnostic: "invalid duplicate target dependency declaration 'Bar' in target 'Foo' from package '\(package.packageIdentity)'",
+                severity: .warning
+            )
+            diagnostics.checkUnordered(
+                diagnostic: "invalid duplicate target dependency declaration 'Foo2' in target 'Foo' from package '\(package.packageIdentity)'",
+                severity: .warning
+            )
+            diagnostics.checkUnordered(
+                diagnostic: "invalid duplicate target dependency declaration 'Bar2' in target 'Foo' from package '\(package.packageIdentity)'",
+                severity: .warning
+            )
+            diagnostics.checkUnordered(
+                diagnostic: "invalid duplicate target dependency declaration 'Foo3' in target 'Foo' from package '\(package.packageIdentity)'",
+                severity: .warning
+            )
         }
     }
 
@@ -2049,11 +2819,11 @@ class PackageBuilderTests: XCTestCase {
             "/Sources/Baz/baz.swift"
         )
 
-        let manifest = Manifest.createManifest(
-            name: "Foo",
-            v: .v5,
+        let manifest = Manifest.createRootManifest(
+            displayName: "Foo",
+            toolsVersion: .v5,
             dependencies: [
-                PackageDependencyDescription(url: "/Biz", requirement: .localPackage),
+                .fileSystem(path: "/Biz"),
             ],
             targets: [
                 try TargetDescription(
@@ -2113,53 +2883,306 @@ class PackageBuilderTests: XCTestCase {
             "/Foo/Sources/Foo/Resources/en.lproj/Localizable.strings"
         )
 
-        let manifest = Manifest.createManifest(
-            name: "Foo",
-            v: .v5_3,
+        let manifest = Manifest.createRootManifest(
+            displayName: "Foo",
+            toolsVersion: .v5_3,
             targets: [
                 try TargetDescription(name: "Foo", resources: [
-                    .init(rule: .process, path: "Resources")
+                    .init(rule: .process(localization: .none), path: "Resources")
                 ]),
             ]
         )
 
-        PackageBuilderTester(manifest, path: AbsolutePath("/Foo"), in: fs) { _, diagnostics in
-            diagnostics.check(diagnostic: "manifest property 'defaultLocalization' not set; it is required in the presence of localized resources", behavior: .error)
+        PackageBuilderTester(manifest, path: "/Foo", in: fs) { _, diagnostics in
+            diagnostics.check(diagnostic: "manifest property 'defaultLocalization' not set; it is required in the presence of localized resources", severity: .error)
         }
     }
 
-    func testXcodeResources() throws {
+    func testXcodeResources5_4AndEarlier() throws {
+        // In SwiftTools 5.4 and earlier, supported xcbuild file types are supported by default.
+        // Of course, modern file types such as xcstrings won't be supported here because those require a newer Swift tools version in general.
+        
+        let root: AbsolutePath = "/Foo"
+        let foo = root.appending(components: "Sources", "Foo")
+
         let fs = InMemoryFileSystem(emptyFiles:
-            "/Foo/Sources/Foo/foo.swift",
-            "/Foo/Sources/Foo/Foo.xcassets",
-            "/Foo/Sources/Foo/Foo.xib",
-            "/Foo/Sources/Foo/Foo.xcdatamodel",
-            "/Foo/Sources/Foo/Foo.metal"
+            foo.appending(components: "foo.swift").pathString,
+            foo.appending(components: "Foo.xcassets").pathString,
+            foo.appending(components: "Foo.xib").pathString,
+            foo.appending(components: "Foo.xcdatamodel").pathString,
+            foo.appending(components: "Foo.metal").pathString
         )
 
-        let manifest = Manifest.createManifest(
-            name: "Foo",
-            v: .v5_3,
+        let manifest = Manifest.createRootManifest(
+            displayName: "Foo",
+            toolsVersion: .v5_3,
             targets: [
                 try TargetDescription(name: "Foo"),
             ]
         )
 
-        PackageBuilderTester(manifest, path: AbsolutePath("/Foo"), in: fs) { result, diagnostics in
+        PackageBuilderTester(manifest, path: root, in: fs) { result, diagnostics in
             result.checkModule("Foo") { result in
                 result.checkSources(sources: ["foo.swift"])
                 result.checkResources(resources: [
-                    "/Foo/Sources/Foo/Foo.xib",
-                    "/Foo/Sources/Foo/Foo.xcdatamodel",
-                    "/Foo/Sources/Foo/Foo.xcassets",
-                    "/Foo/Sources/Foo/Foo.metal"
+                    foo.appending(components: "Foo.xib").pathString,
+                    foo.appending(components: "Foo.xcdatamodel").pathString,
+                    foo.appending(components: "Foo.xcassets").pathString,
+                    foo.appending(components: "Foo.metal").pathString
                 ])
             }
         }
     }
-}
+    
+    func testXcodeResources5_5AndLater() throws {
+        // In SwiftTools 5.5 and later, xcbuild file types are only supported when explicitly passed via additionalFileRules.
+        
+        let root: AbsolutePath = "/Foo"
+        let foo = root.appending(components: "Sources", "Foo")
 
-extension PackageModel.Product: ObjectIdentifierProtocol {}
+        let fs = InMemoryFileSystem(emptyFiles:
+            foo.appending(components: "foo.swift").pathString,
+            foo.appending(components: "Foo.xcassets").pathString,
+            foo.appending(components: "Foo.xcstrings").pathString,
+            foo.appending(components: "Foo.xib").pathString,
+            foo.appending(components: "Foo.xcdatamodel").pathString,
+            foo.appending(components: "Foo.metal").pathString
+        )
+
+        let manifest = Manifest.createRootManifest(
+            displayName: "Foo",
+            toolsVersion: .v5_9,
+            targets: [
+                try TargetDescription(name: "Foo"),
+            ]
+        )
+
+        PackageBuilderTester(manifest, path: root, supportXCBuildTypes: true, in: fs) { result, diagnostics in
+            result.checkModule("Foo") { result in
+                result.checkSources(sources: ["foo.swift"])
+                result.checkResources(resources: [
+                    foo.appending(components: "Foo.xib").pathString,
+                    foo.appending(components: "Foo.xcdatamodel").pathString,
+                    foo.appending(components: "Foo.xcassets").pathString,
+                    foo.appending(components: "Foo.xcstrings").pathString,
+                    foo.appending(components: "Foo.metal").pathString
+                ])
+            }
+        }
+    }
+
+    func testXcodeResources6_0AndLater() throws {
+        // In SwiftTools 6.0 and later, xcprivacy file types are only supported when explicitly passed via additionalFileRules.
+
+        let root: AbsolutePath = "/Foo"
+        let foo = root.appending(components: "Sources", "Foo")
+
+        let fs = InMemoryFileSystem(emptyFiles:
+            foo.appending(components: "foo.swift").pathString,
+            foo.appending(components: "Foo.xcassets").pathString,
+            foo.appending(components: "Foo.xcstrings").pathString,
+            foo.appending(components: "Foo.xib").pathString,
+            foo.appending(components: "Foo.xcdatamodel").pathString,
+            foo.appending(components: "Foo.metal").pathString,
+            foo.appending(components: "PrivacyInfo.xcprivacy").pathString
+        )
+
+        let manifest = Manifest.createRootManifest(
+            displayName: "Foo",
+            toolsVersion: .v6_0,
+            targets: [
+                try TargetDescription(name: "Foo"),
+            ]
+        )
+
+        PackageBuilderTester(manifest, path: root, supportXCBuildTypes: true, in: fs) { result, diagnostics in
+            result.checkModule("Foo") { result in
+                result.checkSources(sources: ["foo.swift"])
+                result.checkResources(resources: [
+                    foo.appending(components: "Foo.xib").pathString,
+                    foo.appending(components: "Foo.xcdatamodel").pathString,
+                    foo.appending(components: "Foo.xcassets").pathString,
+                    foo.appending(components: "Foo.xcstrings").pathString,
+                    foo.appending(components: "Foo.metal").pathString,
+                    foo.appending(components: "PrivacyInfo.xcprivacy").pathString,
+                ])
+            }
+        }
+    }
+
+    func testXCPrivacyNoDiagnostics() throws {
+        // In SwiftTools 6.0 and later, xcprivacy file types should not produce diagnostics messages when included
+        // as resources and built with `swift build`.
+
+        let root: AbsolutePath = "/Foo"
+        let foo = root.appending(components: "Sources", "Foo")
+
+        let fs = InMemoryFileSystem(emptyFiles:
+            foo.appending(components: "foo.swift").pathString,
+            foo.appending(components: "PrivacyInfo.xcprivacy").pathString
+        )
+
+        let manifest = Manifest.createRootManifest(
+            displayName: "Foo",
+            toolsVersion: .v6_0,
+            targets: [
+                try TargetDescription(
+                    name: "Foo",
+                    resources: [.init(rule: .copy, path: "PrivacyInfo.xcprivacy")]
+                ),
+            ]
+        )
+
+        PackageBuilderTester(manifest, path: root, supportXCBuildTypes: false, in: fs) { result, diagnostics in
+            result.checkModule("Foo") { result in
+                result.checkSources(sources: ["foo.swift"])
+                result.checkResources(resources: [
+                    foo.appending(components: "PrivacyInfo.xcprivacy").pathString,
+                ])
+            }
+
+            diagnostics.checkIsEmpty()
+        }
+    }
+
+    func testSnippetsLinkProductLibraries() throws {
+        let root = AbsolutePath("/Foo")
+        let internalSourcesDir = root.appending(components: "Sources", "Internal")
+        let productSourcesDir = root.appending(components: "Sources", "Product")
+        let snippetsDir = root.appending(components: "Snippets")
+        let fs = InMemoryFileSystem(emptyFiles:
+                                        internalSourcesDir.appending("Internal.swift").pathString,
+            productSourcesDir.appending("Product.swift").pathString,
+            snippetsDir.appending("ASnippet.swift").pathString)
+        
+        let manifest = Manifest.createRootManifest(
+            displayName: "Foo", toolsVersion: .v5_7,
+            products: [
+                try ProductDescription(name: "Product", type: .library(.automatic), targets: ["Product"])
+            ],
+            targets: [
+                try TargetDescription(name: "Internal"),
+                try TargetDescription(name: "Product"),
+            ])
+        
+        PackageBuilderTester(manifest, path: root, in: fs) { result, diagnostics in
+            result.checkProduct("Product") { product in
+                product.check(type: .library(.automatic), targets: ["Product"])
+            }
+            result.checkProduct("ASnippet") { aSnippet in
+                aSnippet.check(type: .snippet, targets: ["ASnippet"])
+            }
+            result.checkModule("Internal") { foo in
+                foo.checkSources(sources: ["Internal.swift"])
+            }
+            result.checkModule("Product") { foo in
+                foo.checkSources(sources: ["Product.swift"])
+            }
+            result.checkModule("ASnippet") { aSnippet in
+                aSnippet.checkSources(sources: ["ASnippet.swift"])
+                aSnippet.check(targetDependencies: ["Product"])
+            }
+        }
+    }
+
+    func testCustomPlatformInConditionals() throws {
+        let fs = InMemoryFileSystem(emptyFiles: "/Sources/Foo/Best.swift")
+
+        let manifest = Manifest.createRootManifest(
+            displayName: "Foo",
+            path: .root,
+            targets: [
+                try TargetDescription(
+                    name: "Foo",
+                    settings: [
+                        .init(tool: .swift, kind: .define("YOLO"), condition: .init(platformNames: ["bestOS"])),
+                    ]
+                )
+            ]
+        )
+
+        var assignment = BuildSettings.Assignment()
+        assignment.values = ["YOLO"]
+        assignment.conditions = [PackageCondition(platforms: [.custom(name: "bestOS", oldestSupportedVersion: .unknown)])]
+
+        var versionAssignment = BuildSettings.Assignment(default: true)
+        versionAssignment.values = ["4"]
+
+        var settings = BuildSettings.AssignmentTable()
+        settings.add(assignment, for: .SWIFT_ACTIVE_COMPILATION_CONDITIONS)
+        settings.add(versionAssignment, for: .SWIFT_VERSION)
+
+        PackageBuilderTester(manifest, in: fs) { package, _ in
+            package.checkModule("Foo") { module in
+                module.check(c99name: "Foo", type: .library)
+                module.check(buildSettings: settings)
+            }
+        }
+    }
+
+    func testSwiftLanguageVersionPerTarget() throws {
+        let fs = InMemoryFileSystem(emptyFiles:
+            "/Sources/foo/foo.swift",
+            "/Sources/bar/bar.swift"
+        )
+
+        let manifest = Manifest.createRootManifest(
+            displayName: "pkg",
+            toolsVersion: .v5,
+            targets: [
+                try TargetDescription(
+                    name: "foo",
+                    settings: [
+                        .init(tool: .swift, kind: .swiftLanguageMode(.v5))
+                    ]
+                ),
+                try TargetDescription(
+                    name: "bar",
+                    settings: [
+                        .init(tool: .swift, kind: .swiftLanguageMode(.v3), condition: .init(platformNames: ["linux"])),
+                        .init(tool: .swift, kind: .swiftLanguageMode(.v4), condition: .init(platformNames: ["macos"], config: "debug"))
+                    ]
+                ),
+            ]
+        )
+
+        PackageBuilderTester(manifest, in: fs) { package, _ in
+            package.checkModule("foo") { package in
+                let macosDebugScope = BuildSettings.Scope(
+                    package.target.buildSettings,
+                    environment: BuildEnvironment(platform: .macOS, configuration: .debug)
+                )
+                XCTAssertEqual(macosDebugScope.evaluate(.SWIFT_VERSION), ["5"])
+
+                let macosReleaseScope = BuildSettings.Scope(
+                    package.target.buildSettings,
+                    environment: BuildEnvironment(platform: .macOS, configuration: .release)
+                )
+                XCTAssertEqual(macosReleaseScope.evaluate(.SWIFT_VERSION), ["5"])
+            }
+
+            package.checkModule("bar") { package in
+                let linuxDebugScope = BuildSettings.Scope(
+                    package.target.buildSettings,
+                    environment: BuildEnvironment(platform: .linux, configuration: .debug)
+                )
+                XCTAssertEqual(linuxDebugScope.evaluate(.SWIFT_VERSION), ["3"])
+
+                let macosDebugScope = BuildSettings.Scope(
+                    package.target.buildSettings,
+                    environment: BuildEnvironment(platform: .macOS, configuration: .debug)
+                )
+                XCTAssertEqual(macosDebugScope.evaluate(.SWIFT_VERSION), ["4"])
+
+                let macosReleaseScope = BuildSettings.Scope(
+                    package.target.buildSettings,
+                    environment: BuildEnvironment(platform: .macOS, configuration: .release)
+                )
+                XCTAssertEqual(macosReleaseScope.evaluate(.SWIFT_VERSION), ["5"])
+            }
+        }
+    }
+}
 
 final class PackageBuilderTester {
     private enum Result {
@@ -2167,59 +3190,60 @@ final class PackageBuilderTester {
         case error(String)
     }
 
+    // the package identity
+    public let packageIdentity: PackageIdentity
+
     /// Contains the result produced by PackageBuilder.
     private let result: Result
 
     /// Contains the targets which have not been checked yet.
-    private var uncheckedModules: Set<PackageModel.Target> = []
+    private var uncheckedModules: Set<PackageModel.Module> = []
 
     /// Contains the products which have not been checked yet.
     private var uncheckedProducts: Set<PackageModel.Product> = []
-
-    fileprivate static let xcTestMinimumDeploymentTargets = [
-        PackageModel.Platform.macOS: PlatformVersion("10.15"),
-        PackageModel.Platform.iOS: PlatformVersion("9.0"),
-        PackageModel.Platform.tvOS: PlatformVersion("9.0"),
-        PackageModel.Platform.watchOS: PlatformVersion("2.0"),
-    ]
 
     @discardableResult
     init(
         _ manifest: Manifest,
         path: AbsolutePath = .root,
-        remoteArtifacts: [RemoteArtifact] = [],
+        binaryArtifacts: [String: BinaryArtifact] = [:],
         shouldCreateMultipleTestProducts: Bool = false,
         createREPLProduct: Bool = false,
+        supportXCBuildTypes: Bool = false,
         in fs: FileSystem,
         file: StaticString = #file,
         line: UInt = #line,
-        _ body: (PackageBuilderTester, DiagnosticsEngineResult) -> Void
+        _ body: (PackageBuilderTester, DiagnosticsTestResult) -> Void
     ) {
-        let diagnostics = DiagnosticsEngine()
+        self.packageIdentity = PackageIdentity(urlString: manifest.packageLocation)
+        let observability = ObservabilitySystem.makeForTesting()
         do {
             // FIXME: We should allow customizing root package boolean.
             let builder = PackageBuilder(
+                identity: self.packageIdentity,
                 manifest: manifest,
                 productFilter: .everything,
                 path: path,
-                remoteArtifacts: remoteArtifacts,
-                xcTestMinimumDeploymentTargets: Self.xcTestMinimumDeploymentTargets,
-                fileSystem: fs,
-                diagnostics: diagnostics,
+                additionalFileRules: supportXCBuildTypes ? FileRuleDescription.xcbuildFileTypes : FileRuleDescription.swiftpmFileTypes,
+                binaryArtifacts: binaryArtifacts,
                 shouldCreateMultipleTestProducts: shouldCreateMultipleTestProducts,
                 warnAboutImplicitExecutableTargets: true,
-                createREPLProduct: createREPLProduct)
+                createREPLProduct: createREPLProduct,
+                fileSystem: fs,
+                observabilityScope: observability.topScope,
+                enabledTraits: []
+            )
             let loadedPackage = try builder.construct()
-            result = .package(loadedPackage)
-            uncheckedModules = Set(loadedPackage.targets)
+            self.result = .package(loadedPackage)
+            uncheckedModules = Set(loadedPackage.modules)
             uncheckedProducts = Set(loadedPackage.products)
         } catch {
             let errorString = String(describing: error)
-            result = .error(errorString)
-            diagnostics.emit(error: errorString)
+            self.result = .error(errorString)
+            observability.topScope.emit(error)
         }
 
-        DiagnosticsEngineTester(diagnostics) { diagnostics in
+        testDiagnostics(observability.diagnostics, file: file, line: line) { diagnostics in
             body(self, diagnostics)
         }
 
@@ -2236,19 +3260,19 @@ final class PackageBuilderTester {
         }
     }
 
-    func checkPredefinedPaths(target: String, testTarget: String, file: StaticString = #file, line: UInt = #line) {
+    func checkPredefinedPaths(target: AbsolutePath, testTarget: AbsolutePath, file: StaticString = #file, line: UInt = #line) {
         guard case .package(let package) = result else {
             return XCTFail("Expected package did not load \(self)", file: file, line: line)
         }
-        XCTAssertEqual(target, package.targetSearchPath.pathString, file: file, line: line)
-        XCTAssertEqual(testTarget, package.testTargetSearchPath.pathString, file: file, line: line)
+        XCTAssertEqual(target, package.targetSearchPath, file: file, line: line)
+        XCTAssertEqual(testTarget, package.testTargetSearchPath, file: file, line: line)
     }
 
     func checkModule(_ name: String, file: StaticString = #file, line: UInt = #line, _ body: ((ModuleResult) -> Void)? = nil) {
         guard case .package(let package) = result else {
             return XCTFail("Expected package did not load \(self)", file: file, line: line)
         }
-        guard let target = package.targets.first(where: {$0.name == name}) else {
+        guard let target = package.modules.first(where: {$0.name == name}) else {
             return XCTFail("Module: \(name) not found", file: file, line: line)
         }
         uncheckedModules.remove(target)
@@ -2276,47 +3300,47 @@ final class PackageBuilderTester {
 
         func check(type: PackageModel.ProductType, targets: [String], file: StaticString = #file, line: UInt = #line) {
             XCTAssertEqual(product.type, type, file: file, line: line)
-            XCTAssertEqual(product.targets.map{$0.name}.sorted(), targets.sorted(), file: file, line: line)
+            XCTAssertEqual(product.modules.map{$0.name}.sorted(), targets.sorted(), file: file, line: line)
         }
 
-        func check(testManifestPath: String?, file: StaticString = #file, line: UInt = #line) {
-            XCTAssertEqual(product.testManifest, testManifestPath.map({ AbsolutePath($0) }), file: file, line: line)
+        func check(testEntryPointPath: String?, file: StaticString = #file, line: UInt = #line) {
+            XCTAssertEqual(product.testEntryPointPath, testEntryPointPath.map({ try! AbsolutePath(validating: $0) }), file: file, line: line)
         }
     }
 
     final class ModuleResult {
-        let target: PackageModel.Target
+        let target: PackageModel.Module
 
-        fileprivate init(_ target: PackageModel.Target) {
+        fileprivate init(_ target: PackageModel.Module) {
             self.target = target
         }
 
         func check(includeDir: String, file: StaticString = #file, line: UInt = #line) {
-            guard case let target as ClangTarget = target else {
+            guard case let target as ClangModule = target else {
                 return XCTFail("Include directory is being checked on a non clang target", file: file, line: line)
             }
             XCTAssertEqual(target.includeDir.pathString, includeDir, file: file, line: line)
         }
 
         func check(moduleMapType: ModuleMapType, file: StaticString = #file, line: UInt = #line) {
-            guard case let target as ClangTarget = target else {
+            guard case let target as ClangModule = target else {
                 return XCTFail("Module map type is being checked on a non-Clang target", file: file, line: line)
             }
             XCTAssertEqual(target.moduleMapType, moduleMapType, file: file, line: line)
         }
 
-        func check(c99name: String? = nil, type: PackageModel.Target.Kind? = nil, file: StaticString = #file, line: UInt = #line) {
-            if let c99name = c99name {
+        func check(c99name: String? = nil, type: PackageModel.Module.Kind? = nil, file: StaticString = #file, line: UInt = #line) {
+            if let c99name {
                 XCTAssertEqual(target.c99name, c99name, file: file, line: line)
             }
-            if let type = type {
+            if let type {
                 XCTAssertEqual(target.type, type, file: file, line: line)
             }
         }
 
         func checkSources(root: String? = nil, sources paths: [String], file: StaticString = #file, line: UInt = #line) {
-            if let root = root {
-                XCTAssertEqual(target.sources.root, AbsolutePath(root), file: file, line: line)
+            if let root {
+                XCTAssertEqual(target.sources.root, try! AbsolutePath(validating: root), file: file, line: line)
             }
             let sources = Set(self.target.sources.relativePaths.map({ $0.pathString }))
             XCTAssertEqual(sources, Set(paths), "unexpected source files in \(target.name)", file: file, line: line)
@@ -2331,11 +3355,11 @@ final class PackageBuilderTester {
         }
 
         func check(targetDependencies depsToCheck: [String], file: StaticString = #file, line: UInt = #line) {
-            XCTAssertEqual(Set(depsToCheck), Set(target.dependencies.compactMap { $0.target?.name }), "unexpected dependencies in \(target.name)", file: file, line: line)
+            XCTAssertEqual(Set(depsToCheck), Set(target.dependencies.compactMap { $0.module?.name }), "unexpected dependencies in \(target.name)", file: file, line: line)
         }
 
         func check(
-            productDependencies depsToCheck: [Target.ProductReference],
+            productDependencies depsToCheck: [Module.ProductReference],
             file: StaticString = #file,
             line: UInt = #line
         ) {
@@ -2374,27 +3398,30 @@ final class PackageBuilderTester {
         }
 
         func check(swiftVersion: String, file: StaticString = #file, line: UInt = #line) {
-            guard case let swiftTarget as SwiftTarget = target else {
+            guard case let swiftTarget as SwiftModule = target else {
                 return XCTFail("\(target) is not a swift target", file: file, line: line)
             }
-            XCTAssertEqual(SwiftLanguageVersion(string: swiftVersion)!, swiftTarget.swiftVersion, file: file, line: line)
+            let versionAssignments = swiftTarget.buildSettings.assignments[.SWIFT_VERSION]?
+                .filter { $0.conditions.isEmpty }.flatMap(\.values)
+            XCTAssertNotNil(versionAssignments?.contains(swiftVersion), file: file, line: line)
         }
 
-        func checkPlatforms(_ platforms: [String: String], file: StaticString = #file, line: UInt = #line) {
-            let targetPlatforms = Dictionary(uniqueKeysWithValues: target.platforms.map({ ($0.platform.name, $0.version.versionString) }))
-            XCTAssertEqual(platforms, targetPlatforms, file: file, line: line)
+        func check(pluginCapability: PluginCapability, file: StaticString = #file, line: UInt = #line) {
+            guard case let target as PluginModule = target else {
+                return XCTFail("Plugin capability is being checked on a target", file: file, line: line)
+            }
+            XCTAssertEqual(target.capability, pluginCapability, file: file, line: line)
         }
 
-        func checkPlatformOptions(_ platform: PackageModel.Platform, options: [String], file: StaticString = #file, line: UInt = #line) {
-            let platform = target.getSupportedPlatform(for: platform)
-            XCTAssertEqual(platform?.options, options, file: file, line: line)
+        func check(buildSettings: PackageModel.BuildSettings.AssignmentTable, file: StaticString = #file, line: UInt = #line) {
+            XCTAssertEqual(target.buildSettings.assignments, buildSettings.assignments, file: file, line: line)
         }
     }
 
     final class ModuleDependencyResult {
-        let dependency: PackageModel.Target.Dependency
+        let dependency: PackageModel.Module.Dependency
 
-        fileprivate init(_ dependency: PackageModel.Target.Dependency) {
+        fileprivate init(_ dependency: PackageModel.Module.Dependency) {
             self.dependency = dependency
         }
 

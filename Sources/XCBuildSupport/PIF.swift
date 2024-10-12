@@ -1,16 +1,21 @@
-/*
- This source file is part of the Swift.org open source project
-
- Copyright (c) 2014 - 2020 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
- */
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2014-2023 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
 import Basics
 import Foundation
-import TSCBasic
+import OrderedCollections
+import PackageModel
+
+import struct TSCBasic.ByteString
 
 /// The Project Interchange Format (PIF) is a structured representation of the
 /// project model created by clients (Xcode/SwiftPM) to send to XCBuild.
@@ -115,7 +120,9 @@ public enum PIF {
             try contents.encode(path, forKey: .path)
 
             if encoder.userInfo.keys.contains(.encodeForXCBuild) {
-                precondition(signature != nil, "Expected to have workspace signature when encoding for XCBuild")
+                guard let signature else {
+                    throw InternalError("Expected to have workspace signature when encoding for XCBuild")
+                }
                 try container.encode(signature, forKey: "signature")
                 try contents.encode(projects.map({ $0.signature }), forKey: .projects)
             } else {
@@ -196,7 +203,9 @@ public enum PIF {
             try contents.encode(buildConfigurations, forKey: .buildConfigurations)
 
             if encoder.userInfo.keys.contains(.encodeForXCBuild) {
-                precondition(signature != nil, "Expected to have project signature when encoding for XCBuild")
+                guard let signature else {
+                    throw InternalError("Expected to have project signature when encoding for XCBuild")
+                }
                 try container.encode(signature, forKey: "signature")
                 try contents.encode(targets.map{ $0.signature }, forKey: .targets)
             } else {
@@ -237,7 +246,7 @@ public enum PIF {
         }
     }
 
-    /// Abstract base class for all items in the group hierarhcy.
+    /// Abstract base class for all items in the group hierarchy.
     public class Reference: TypedObject {
         /// Determines the base path for a reference's relative path.
         public enum SourceTree: String, Codable {
@@ -361,7 +370,7 @@ public enum PIF {
             )
 
             self.children = children
-            
+
             super.init(guid: guid, path: path, sourceTree: sourceTree, name: name)
         }
 
@@ -431,7 +440,7 @@ public enum PIF {
         }
     }
 
-    public class BaseTarget: TypedObject, ObjectIdentifierProtocol {
+    public class BaseTarget: TypedObject {
         class override var type: String { "target" }
         public let guid: GUID
         public var name: String
@@ -502,7 +511,9 @@ public enum PIF {
             try contents.encode(impartedBuildProperties, forKey: .impartedBuildProperties)
 
             if encoder.userInfo.keys.contains(.encodeForXCBuild) {
-                precondition(signature != nil, "Expected to have \(Swift.type(of: self)) signature when encoding for XCBuild")
+                guard let signature else {
+                    throw InternalError("Expected to have \(Swift.type(of: self)) signature when encoding for XCBuild")
+                }
                 try container.encode(signature, forKey: "signature")
             }
         }
@@ -597,7 +608,9 @@ public enum PIF {
             try contents.encode(buildConfigurations, forKey: .buildConfigurations)
 
             if encoder.userInfo.keys.contains(.encodeForXCBuild) {
-                precondition(signature != nil, "Expected to have \(Swift.type(of: self)) signature when encoding for XCBuild")
+                guard let signature else {
+                    throw InternalError("Expected to have \(Swift.type(of: self)) signature when encoding for XCBuild")
+                }
                 try container.encode(signature, forKey: "signature")
             }
 
@@ -638,14 +651,14 @@ public enum PIF {
             let type = try container.decode(String.self, forKey: .type)
 
             let buildPhases: [BuildPhase]
-            let impartedBuildProperties: BuildSettings
+            let impartedBuildProperties: ImpartedBuildProperties
 
             if type == "packageProduct" {
                 self.productType = .packageProduct
                 self.productName = ""
                 let fwkBuildPhase = try container.decodeIfPresent(FrameworksBuildPhase.self, forKey: .frameworksBuildPhase)
                 buildPhases = fwkBuildPhase.map{ [$0] } ?? []
-                impartedBuildProperties = BuildSettings()
+                impartedBuildProperties = ImpartedBuildProperties(settings: BuildSettings())
             } else if type == "standard" {
                 self.productType = try container.decode(ProductType.self, forKey: .productTypeIdentifier)
 
@@ -662,7 +675,7 @@ public enum PIF {
                     return try BuildPhase.decode(container: &buildPhasesContainer, type: type)
                 }
 
-                impartedBuildProperties = try container.decode(BuildSettings.self, forKey: .impartedBuildProperties)
+                impartedBuildProperties = try container.decode(ImpartedBuildProperties.self, forKey: .impartedBuildProperties)
             } else {
                 throw InternalError("Unhandled target type \(type)")
             }
@@ -673,7 +686,7 @@ public enum PIF {
                 buildConfigurations: buildConfigurations,
                 buildPhases: buildPhases,
                 dependencies: dependencies,
-                impartedBuildSettings: impartedBuildProperties,
+                impartedBuildSettings: impartedBuildProperties.buildSettings,
                 signature: nil
             )
         }
@@ -764,44 +777,50 @@ public enum PIF {
         public var headerVisibility: HeaderVisibility? = nil
         public var platformFilters: [PlatformFilter]
 
-        public init(guid: GUID, file: FileReference, platformFilters: [PlatformFilter]) {
+        public init(guid: GUID, file: FileReference, platformFilters: [PlatformFilter], headerVisibility: HeaderVisibility? = nil) {
             self.guid = guid
             self.reference = .file(guid: file.guid)
             self.platformFilters = platformFilters
+            self.headerVisibility = headerVisibility
         }
 
-        public init(guid: GUID, fileGUID: PIF.GUID, platformFilters: [PlatformFilter]) {
+        public init(guid: GUID, fileGUID: PIF.GUID, platformFilters: [PlatformFilter], headerVisibility: HeaderVisibility? = nil) {
             self.guid = guid
             self.reference = .file(guid: fileGUID)
             self.platformFilters = platformFilters
+            self.headerVisibility = headerVisibility
         }
 
-        public init(guid: GUID, target: PIF.BaseTarget, platformFilters: [PlatformFilter]) {
+        public init(guid: GUID, target: PIF.BaseTarget, platformFilters: [PlatformFilter], headerVisibility: HeaderVisibility? = nil) {
             self.guid = guid
             self.reference = .target(guid: target.guid)
             self.platformFilters = platformFilters
+            self.headerVisibility = headerVisibility
         }
 
-        public init(guid: GUID, targetGUID: PIF.GUID, platformFilters: [PlatformFilter]) {
+        public init(guid: GUID, targetGUID: PIF.GUID, platformFilters: [PlatformFilter], headerVisibility: HeaderVisibility? = nil) {
             self.guid = guid
             self.reference = .target(guid: targetGUID)
             self.platformFilters = platformFilters
+            self.headerVisibility = headerVisibility
         }
 
-        public init(guid: GUID, reference: Reference, platformFilters: [PlatformFilter]) {
+        public init(guid: GUID, reference: Reference, platformFilters: [PlatformFilter], headerVisibility: HeaderVisibility? = nil) {
             self.guid = guid
             self.reference = reference
             self.platformFilters = platformFilters
+            self.headerVisibility = headerVisibility
         }
 
         private enum CodingKeys: CodingKey {
-            case guid, platformFilters, fileReference, targetReference
+            case guid, platformFilters, fileReference, targetReference, headerVisibility
         }
 
         public func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(guid, forKey: .guid)
             try container.encode(platformFilters, forKey: .platformFilters)
+            try container.encodeIfPresent(headerVisibility, forKey: .headerVisibility)
 
             switch self.reference {
             case .file(let fileGUID):
@@ -815,6 +834,7 @@ public enum PIF {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             guid = try container.decode(GUID.self, forKey: .guid)
             platformFilters = try container.decode([PlatformFilter].self, forKey: .platformFilters)
+            headerVisibility = try container.decodeIfPresent(HeaderVisibility.self, forKey: .headerVisibility)
 
             if container.allKeys.contains(.fileReference) {
                 reference = try .file(guid: container.decode(GUID.self, forKey: .fileReference))
@@ -851,14 +871,16 @@ public enum PIF {
         public let guid: GUID
         public var name: String
         public var buildSettings: BuildSettings
+        public let impartedBuildProperties: ImpartedBuildProperties
 
-        public init(guid: GUID, name: String, buildSettings: BuildSettings) {
+        public init(guid: GUID, name: String, buildSettings: BuildSettings, impartedBuildProperties: ImpartedBuildProperties = ImpartedBuildProperties(settings: BuildSettings())) {
             precondition(!guid.isEmpty)
             precondition(!name.isEmpty)
 
             self.guid = guid
             self.name = name
             self.buildSettings = buildSettings
+            self.impartedBuildProperties = impartedBuildProperties
         }
     }
 
@@ -885,13 +907,14 @@ public enum PIF {
             case COPY_PHASE_STRIP
             case DEBUG_INFORMATION_FORMAT
             case DEFINES_MODULE
+            case DRIVERKIT_DEPLOYMENT_TARGET
             case DYLIB_INSTALL_NAME_BASE
             case EMBEDDED_CONTENT_CONTAINS_SWIFT
             case ENABLE_NS_ASSERTIONS
             case ENABLE_TESTABILITY
             case ENABLE_TESTING_SEARCH_PATHS
             case ENTITLEMENTS_REQUIRED
-            case EXECUTABLE_NAME
+            case EXECUTABLE_PREFIX
             case GENERATE_INFOPLIST_FILE
             case GCC_C_LANGUAGE_STANDARD
             case GCC_OPTIMIZATION_LEVEL
@@ -919,8 +942,6 @@ public enum PIF {
             case INSTALL_PATH
             case SUPPORTS_MACCATALYST
             case SWIFT_SERIALIZE_DEBUGGING_OPTIONS
-            case SWIFT_FORCE_STATIC_LINK_STDLIB
-            case SWIFT_FORCE_DYNAMIC_LINK_STDLIB
             case SWIFT_INSTALL_OBJC_HEADER
             case SWIFT_OBJC_INTERFACE_HEADER_NAME
             case SWIFT_OBJC_INTERFACE_HEADER_DIR
@@ -932,8 +953,11 @@ public enum PIF {
             case USE_HEADERMAP
             case USES_SWIFTPM_UNSAFE_FLAGS
             case WATCHOS_DEPLOYMENT_TARGET
+            case XROS_DEPLOYMENT_TARGET
             case MARKETING_VERSION
             case CURRENT_PROJECT_VERSION
+            case SWIFT_EMIT_MODULE_INTERFACE
+            case GENERATE_RESOURCE_ACCESSORS
         }
 
         public enum MultipleValueSetting: String, Codable {
@@ -952,33 +976,55 @@ public enum PIF {
             case SPECIALIZATION_SDK_OPTIONS
             case SUPPORTED_PLATFORMS
             case SWIFT_ACTIVE_COMPILATION_CONDITIONS
+            case SWIFT_MODULE_ALIASES
         }
 
         public enum Platform: String, CaseIterable, Codable {
             case macOS = "macos"
+            case macCatalyst = "maccatalyst"
             case iOS = "ios"
             case tvOS = "tvos"
             case watchOS = "watchos"
+            case driverKit = "driverkit"
             case linux
 
-            public var conditions: [String] {
+            public var packageModelPlatform: PackageModel.Platform {
                 switch self {
-                case .macOS: return ["sdk=macosx*"]
-                case .iOS: return ["sdk=iphonesimulator*", "sdk=iphoneos*"]
-                case .tvOS: return ["sdk=appletvsimulator*", "sdk=appletvos*"]
-                case .watchOS: return ["sdk=watchsimulator*", "sdk=watchos*"]
-                case .linux: return ["sdk=linux*"]
+                case .macOS: return .macOS
+                case .macCatalyst: return .macCatalyst
+                case .iOS: return .iOS
+                case .tvOS: return .tvOS
+                case .watchOS: return .watchOS
+                case .driverKit: return .driverKit
+                case .linux: return .linux
                 }
+            }
+
+            public var conditions: [String] {
+                let filters = [PackageCondition(platforms: [packageModelPlatform])].toPlatformFilters().map { filter in
+                    if filter.environment.isEmpty {
+                        return filter.platform
+                    } else {
+                        return "\(filter.platform)-\(filter.environment)"
+                    }
+                }.sorted()
+                return ["__platform_filter=\(filters.joined(separator: ";"))"]
             }
         }
 
-        public private(set) var platformSpecificSettings = [Platform: [MultipleValueSetting: [String]]]()
-        public private(set) var singleValueSettings: [SingleValueSetting: String] = [:]
-        public private(set) var multipleValueSettings: [MultipleValueSetting: [String]] = [:]
+        public private(set) var platformSpecificSingleValueSettings = OrderedDictionary<Platform, OrderedDictionary<SingleValueSetting, String>>()
+        public private(set) var platformSpecificMultipleValueSettings = OrderedDictionary<Platform, OrderedDictionary<MultipleValueSetting, [String]>>()
+        public private(set) var singleValueSettings: OrderedDictionary<SingleValueSetting, String> = [:]
+        public private(set) var multipleValueSettings: OrderedDictionary<MultipleValueSetting, [String]> = [:]
 
         public subscript(_ setting: SingleValueSetting) -> String? {
             get { singleValueSettings[setting] }
             set { singleValueSettings[setting] = newValue }
+        }
+
+        public subscript(_ setting: SingleValueSetting, for platform: Platform) -> String? {
+            get { platformSpecificSingleValueSettings[platform]?[setting] }
+            set { platformSpecificSingleValueSettings[platform, default: [:]][setting] = newValue }
         }
 
         public subscript(_ setting: SingleValueSetting, default defaultValue: @autoclosure () -> String) -> String {
@@ -992,8 +1038,8 @@ public enum PIF {
         }
 
         public subscript(_ setting: MultipleValueSetting, for platform: Platform) -> [String]? {
-            get { platformSpecificSettings[platform]?[setting] }
-            set { platformSpecificSettings[platform, default: [:]][setting] = newValue }
+            get { platformSpecificMultipleValueSettings[platform]?[setting] }
+            set { platformSpecificMultipleValueSettings[platform, default: [:]][setting] = newValue }
         }
 
         public subscript(
@@ -1009,15 +1055,15 @@ public enum PIF {
             for platform: Platform,
             default defaultValue: @autoclosure () -> [String]
         ) -> [String] {
-            get { platformSpecificSettings[platform, default: [:]][setting, default: defaultValue()] }
-            set { platformSpecificSettings[platform, default: [:]][setting] = newValue }
+            get { platformSpecificMultipleValueSettings[platform, default: [:]][setting, default: defaultValue()] }
+            set { platformSpecificMultipleValueSettings[platform, default: [:]][setting] = newValue }
         }
 
         public init() {
         }
 
         private enum CodingKeys: CodingKey {
-            case platformSpecificSettings, singleValueSettings, multipleValueSettings
+            case platformSpecificSingleValueSettings, platformSpecificMultipleValueSettings, singleValueSettings, multipleValueSettings
         }
 
         public func encode(to encoder: Encoder) throws {
@@ -1026,7 +1072,8 @@ public enum PIF {
             }
 
             var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(platformSpecificSettings, forKey: .platformSpecificSettings)
+            try container.encode(platformSpecificSingleValueSettings, forKey: .platformSpecificSingleValueSettings)
+            try container.encode(platformSpecificMultipleValueSettings, forKey: .platformSpecificMultipleValueSettings)
             try container.encode(singleValueSettings, forKey: .singleValueSettings)
             try container.encode(multipleValueSettings, forKey: .multipleValueSettings)
         }
@@ -1042,7 +1089,15 @@ public enum PIF {
                 try container.encode(value, forKey: StringKey(key.rawValue))
             }
 
-            for (platform, values) in platformSpecificSettings {
+            for (platform, values) in platformSpecificSingleValueSettings {
+                for condition in platform.conditions {
+                    for (key, value) in values {
+                        try container.encode(value, forKey: "\(key.rawValue)[\(condition)]")
+                    }
+                }
+            }
+
+            for (platform, values) in platformSpecificMultipleValueSettings {
                 for condition in platform.conditions {
                     for (key, value) in values {
                         try container.encode(value, forKey: "\(key.rawValue)[\(condition)]")
@@ -1054,14 +1109,15 @@ public enum PIF {
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
 
-            platformSpecificSettings = try container.decodeIfPresent([Platform: [MultipleValueSetting: [String]]].self, forKey: .platformSpecificSettings) ?? .init()
-            singleValueSettings = try container.decodeIfPresent([SingleValueSetting: String].self, forKey: .singleValueSettings) ?? [:]
-            multipleValueSettings = try container.decodeIfPresent([MultipleValueSetting: [String]] .self, forKey: .multipleValueSettings) ?? [:]
+            platformSpecificSingleValueSettings = try container.decodeIfPresent(OrderedDictionary<Platform, OrderedDictionary<SingleValueSetting, String>>.self, forKey: .platformSpecificSingleValueSettings) ?? .init()
+            platformSpecificMultipleValueSettings = try container.decodeIfPresent(OrderedDictionary<Platform, OrderedDictionary<MultipleValueSetting, [String]>>.self, forKey: .platformSpecificMultipleValueSettings) ?? .init()
+            singleValueSettings = try container.decodeIfPresent(OrderedDictionary<SingleValueSetting, String>.self, forKey: .singleValueSettings) ?? [:]
+            multipleValueSettings = try container.decodeIfPresent(OrderedDictionary<MultipleValueSetting, [String]>.self, forKey: .multipleValueSettings) ?? [:]
         }
     }
 }
 
-/// Repesents a filetype recognized by the Xcode build system. 
+/// Represents a filetype recognized by the Xcode build system.
 public struct XCBuildFileType: CaseIterable {
     public static let xcdatamodeld: XCBuildFileType = XCBuildFileType(
         fileType: "xcdatamodeld",
@@ -1160,6 +1216,8 @@ extension PIF.FileReference {
 
         case "xcassets":
             return "folder.assetcatalog"
+        case "xcstrings":
+            return "text.json.xcstrings"
         case "storyboard":
             return "file.storyboard"
         case "xib":

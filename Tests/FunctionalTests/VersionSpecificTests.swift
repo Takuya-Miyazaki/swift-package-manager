@@ -1,36 +1,36 @@
-/*
- This source file is part of the Swift.org open source project
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2014-2017 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
- Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
-*/
-
+import Basics
+import SourceControl
+import _InternalTestSupport
 import XCTest
 
-import TSCBasic
-import SourceControl
-import TSCUtility
-
-import SPMTestSupport
-
-class VersionSpecificTests: XCTestCase {
+final class VersionSpecificTests: XCTestCase {
     /// Functional tests of end-to-end support for version specific dependency resolution.
-    func testEndToEndResolution() throws {
-        try testWithTemporaryDirectory{ path in
+    func testEndToEndResolution() async throws {
+        try await testWithTemporaryDirectory{ path in
             let fs = localFileSystem
 
             // Create a repo for the dependency to test against.
-            let depPath = path.appending(component: "Dep")
+            let depPath = path.appending("Dep")
             try fs.createDirectory(depPath)
             initGitRepo(depPath)
             let repo = GitRepository(path: depPath)
 
             // Create the initial commit.
-            try fs.writeFileContents(depPath.appending(component: "Package.swift")) {
-                $0 <<< """
+            try fs.writeFileContents(
+                depPath.appending("Package.swift"),
+                string: """
                     // swift-tools-version:4.2
                     import PackageDescription
                     let package = Package(
@@ -43,33 +43,39 @@ class VersionSpecificTests: XCTestCase {
                         ]
                     )
                     """
-            }
+            )
             try repo.stage(file: "Package.swift")
             try repo.commit(message: "Initial")
             try repo.tag(name: "1.0.0")
 
             // Create the version to test against.
-            try fs.writeFileContents(depPath.appending(component: "Package.swift")) {
+            try fs.writeFileContents(
+                depPath.appending("Package.swift"),
                 // FIXME: We end up filtering this manifest if it has an invalid
                 // tools version as they're assumed to be v3 manifests. Should we
                 // do something better?
-                $0 <<< "// swift-tools-version:4.2\n"
-                $0 <<< "NOT_A_VALID_PACKAGE"
-            }
-            try fs.writeFileContents(depPath.appending(component: "foo.swift")) {
-                $0 <<< """
+                string: """
+                // swift-tools-version:4.2
+                NOT_A_VALID_PACKAGE
+                """
+            )
+            try fs.writeFileContents(
+                depPath.appending("foo.swift"),
+                string: """
                     public func foo() { print("foo\\n") }
                     """
-            }
+            )
             try repo.stage(file: "Package.swift")
             try repo.stage(file: "foo.swift")
             try repo.commit(message: "Bogus v1.1.0")
             try repo.tag(name: "1.1.0")
 
             // Create the primary repository.
-            let primaryPath = path.appending(component: "Primary")
-            try fs.writeFileContents(primaryPath.appending(component: "Package.swift")) {
-                $0 <<< """
+            let primaryPath = path.appending("Primary")
+            try fs.createDirectory(primaryPath, recursive: true)
+            try fs.writeFileContents(
+                primaryPath.appending("Package.swift"),
+                string: """
                     // swift-tools-version:4.2
                     import PackageDescription
                     let package = Package(
@@ -82,21 +88,23 @@ class VersionSpecificTests: XCTestCase {
                         ]
                     )
                     """
-            }
+            )
             // This build should fail, because of the invalid package.
-            XCTAssertBuildFails(primaryPath)
+            await XCTAssertBuildFails(primaryPath)
 
             // Create a file which requires a version 1.1.0 resolution.
-            try fs.writeFileContents(primaryPath.appending(component: "main.swift")) {
-                $0 <<< """
+            try fs.writeFileContents(
+                primaryPath.appending("main.swift"),
+                string: """
                     import Dep
                     Dep.foo()
                     """
-            }
+            )
 
             // Create a version-specific tag, which should work.
-            try fs.writeFileContents(depPath.appending(component: "Package.swift")) {
-                $0 <<< """
+            try fs.writeFileContents(
+                depPath.appending("Package.swift"),
+                string: """
                     // swift-tools-version:4.2
                     import PackageDescription
                     let package = Package(
@@ -109,14 +117,14 @@ class VersionSpecificTests: XCTestCase {
                         ]
                     )
                     """
-            }
+            )
             try repo.stage(file: "Package.swift")
             try repo.commit(message: "OK v1.1.0")
-            try repo.tag(name: "1.1.0@swift-\(Versioning.currentVersion.major)")
+            try repo.tag(name: "1.1.0@swift-\(SwiftVersion.current.major)")
 
             // The build should work now.
-            _ = try SwiftPMProduct.SwiftPackage.execute(["reset"], packagePath: primaryPath)
-            XCTAssertBuilds(primaryPath)
+            _ = try await SwiftPM.Package.execute(["reset"], packagePath: primaryPath)
+            await XCTAssertBuilds(primaryPath)
         }
     }
 }

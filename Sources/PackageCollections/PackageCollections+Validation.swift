@@ -1,22 +1,25 @@
-/*
- This source file is part of the Swift.org open source project
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2020-2022 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
- Copyright (c) 2020 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
- */
-
-import TSCBasic
-
+import Basics
 import PackageCollectionsModel
 import PackageModel
+
+import struct TSCUtility.Version
 
 // MARK: - Model validations
 
 extension Model.CollectionSource {
-    func validate() -> [ValidationMessage]? {
+    func validate(fileSystem: FileSystem) -> [ValidationMessage]? {
         var messages: [ValidationMessage]?
         let appendMessage = { (message: ValidationMessage) in
             if messages == nil {
@@ -37,8 +40,8 @@ extension Model.CollectionSource {
 
                 if absolutePath == nil {
                     appendMessage(.error("Invalid file path: \(self.url.path). It must be an absolute file system path."))
-                } else if let absolutePath = absolutePath, !localFileSystem.exists(absolutePath) {
-                    appendMessage(.error("Non-local files not allowed: \(self.url.path)"))
+                } else if let absolutePath, !fileSystem.exists(absolutePath) {
+                    appendMessage(.error("\(self.url.path) is either a non-local path or the file does not exist."))
                 }
             }
         }
@@ -79,7 +82,12 @@ extension PackageCollectionModel.V1 {
 
         // TODO: validate package url?
         private func validate(package: Collection.Package, messages: inout [ValidationMessage]) {
-            let packageID = PackageIdentity(url: package.url.absoluteString).description
+            let packageID = "\(PackageIdentity(url: SourceControlURL(package.url)).description) (\(package.url.absoluteString))"
+
+            guard !package.versions.isEmpty else {
+                messages.append(.error("Package \(packageID) does not have any versions.", property: "package.versions"))
+                return
+            }
 
             // Check for duplicate versions
             let nonUniqueVersions = Dictionary(grouping: package.versions, by: { $0.version }).filter { $1.count > 1 }.keys
@@ -89,7 +97,7 @@ extension PackageCollectionModel.V1 {
 
             var nonSemanticVersions = [String]()
             let semanticVersions: [TSCUtility.Version] = package.versions.compactMap {
-                let semver = TSCUtility.Version(string: $0.version)
+                let semver = TSCUtility.Version(tag: $0.version)
                 if semver == nil {
                     nonSemanticVersions.append($0.version)
                 }
@@ -128,17 +136,32 @@ extension PackageCollectionModel.V1 {
             }
 
             package.versions.forEach { version in
-                if version.products.isEmpty {
-                    messages.append(.error("Package \(packageID) version \(version.version) does not contain any products.", property: "version.products"))
+                guard !version.manifests.isEmpty else {
+                    messages.append(.error("Package \(packageID) version \(version.version) does not have any manifests.", property: "version.manifest"))
+                    return
                 }
-                version.products.forEach { product in
-                    if product.targets.isEmpty {
-                        messages.append(.error("Product \(product.name) of package \(packageID) version \(version.version) does not contain any targets.", property: "product.targets"))
-                    }
+                guard version.manifests[version.defaultToolsVersion] != nil else {
+                    messages.append(.error("Package \(packageID) version \(version.version) is missing the default manifest (tools version: \(version.defaultToolsVersion))", property: "version.manifest"))
+                    return
                 }
 
-                if version.targets.isEmpty {
-                    messages.append(.error("Package \(packageID) version \(version.version) does not contain any targets.", property: "version.targets"))
+                version.manifests.forEach { toolsVersion, manifest in
+                    if toolsVersion != manifest.toolsVersion {
+                        messages.append(.error("Package \(packageID) manifest tools version \(manifest.toolsVersion) does not match \(toolsVersion)", property: "version.manifest"))
+                    }
+
+                    if manifest.products.isEmpty {
+                        messages.append(.error("Package \(packageID) version \(version.version) tools-version \(toolsVersion) does not contain any products.", property: "version.manifest.products"))
+                    }
+                    manifest.products.forEach { product in
+                        if product.targets.isEmpty {
+                            messages.append(.error("Product \(product.name) of package \(packageID) version \(version.version) tools-version \(toolsVersion) does not contain any targets.", property: "product.targets"))
+                        }
+                    }
+
+                    if manifest.targets.isEmpty {
+                        messages.append(.error("Package \(packageID) version \(version.version) tools-version \(toolsVersion) does not contain any targets.", property: "version.manifest.targets"))
+                    }
                 }
             }
         }
@@ -210,6 +233,15 @@ extension Array where Element == ValidationMessage {
 public enum ValidationError: Error, Equatable, CustomStringConvertible {
     case property(name: String, message: String)
     case other(message: String)
+    
+    public var message: String {
+        switch self {
+        case .property(_, let message):
+            return message
+        case .other(let message):
+            return message
+        }
+    }
 
     public var description: String {
         switch self {

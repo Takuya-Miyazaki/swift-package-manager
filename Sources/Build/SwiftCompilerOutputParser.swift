@@ -1,16 +1,19 @@
-/*
- This source file is part of the Swift.org open source project
-
- Copyright (c) 2020 Apple Inc. and the Swift project authors
- Licensed under Apache License v2.0 with Runtime Library Exception
-
- See http://swift.org/LICENSE.txt for license information
- See http://swift.org/CONTRIBUTORS.txt for Swift project authors
- */
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the Swift open source project
+//
+// Copyright (c) 2020 Apple Inc. and the Swift project authors
+// Licensed under Apache License v2.0 with Runtime Library Exception
+//
+// See http://swift.org/LICENSE.txt for license information
+// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+//
+//===----------------------------------------------------------------------===//
 
 import Foundation
-import TSCBasic
-import TSCUtility
+
+import class TSCUtility.JSONMessageStreamingParser
+import protocol TSCUtility.JSONMessageStreamingParserDelegate
 
 /// Represents a message output by the Swift compiler in JSON output mode.
 public struct SwiftCompilerMessage {
@@ -70,6 +73,7 @@ public struct SwiftCompilerMessage {
         case began(BeganInfo)
         case skipped(SkippedInfo)
         case finished(OutputInfo)
+        case abnormal(OutputInfo)
         case signalled(OutputInfo)
         case unparsableOutput(String)
     }
@@ -158,7 +162,7 @@ extension SwiftCompilerOutputParser: JSONMessageStreamingParserDelegate {
             return
         }
 
-        let message = SwiftCompilerMessage(name: "unknown", kind: .unparsableOutput(text))
+        let message = SwiftCompilerMessage(name: "unknown", kind: .unparsableOutput(text + "\n"))
         delegate?.swiftCompilerOutputParser(self, didParse: message)
     }
 
@@ -198,6 +202,8 @@ extension SwiftCompilerMessage.Kind: Decodable, Equatable {
             self = try .skipped(SkippedInfo(from: decoder))
         case "finished":
             self = try .finished(OutputInfo(from: decoder))
+        case "abnormal-exit":
+            self = try .abnormal(OutputInfo(from: decoder))
         case "signalled":
             self = try .signalled(OutputInfo(from: decoder))
         default:
